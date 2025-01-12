@@ -34,12 +34,13 @@ const CALENDAR_ID = process.env.CALENDAR_ID || 'your_calendar_id@group.calendar.
 export const extractZipFromGmail = async (req: Request, res: Response) => {
   try {
     // Gmail メールの検索クエリを設定
-    const query = 'subject:"勤怠表" has:attachment filename:zip';
+    const query = 'label:jinjer勤怠 subject:"【jinjer勤怠】汎用データ_ダウンロード処理完了通知" has:attachment filename:zip';
     
     // メッセージの一覧を取得
     const messagesResponse = await gmail.users.messages.list({
       userId: 'me',
       q: query,
+      maxResults: 1
     });
     
     const messages = messagesResponse.data.messages;
@@ -100,13 +101,13 @@ export const extractZipFromGmail = async (req: Request, res: Response) => {
     // ZIPファイルの解凍
     const zipFiles = await unzipBuffer(zipData);
     
-    // CSVファイルを探して処理
-    for (const file of zipFiles) {
-      if (file.name.endsWith('.csv')) {
-        const csvContent = file.content.toString('utf-8');
-        await processCsv(csvContent);
-      }
-    }
+    // // CSVファイルを探して処理
+    // for (const file of zipFiles) {
+    //   if (file.name.endsWith('.csv')) {
+    //     const csvContent = file.content.toString('utf-8');
+    //     await processCsv(csvContent);
+    //   }
+    // }
     
     res.status(200).send('Processing completed successfully.');
   } catch (error) {
