@@ -44,6 +44,9 @@ function addEventsFromSpreadsheet() {
     return;
   }
 
+  // 2025-01-13 以降の日付に限定するための基準日
+  const thresholdDate = new Date('2025-01-13');
+
   // フィルタ済みデータを処理
   filteredData.forEach((row, index) => {
     Logger.log('=== フィルタ後の行番号: ' + index + ' ===');
@@ -58,6 +61,14 @@ function addEventsFromSpreadsheet() {
 
     // 日付文字列から Date オブジェクトに変換（※タイムゾーンに注意）
     const eventDate = new Date(dateStr);
+
+    // 基準日より前の日付の場合はスキップ
+    if (eventDate < thresholdDate) {
+      Logger.log(
+        '行 ' + (index + 1) + '：2025-01-13より前の日付のためスキップ',
+      );
+      return;
+    }
 
     // D列：スケジュール雛形ID を取得（文字列に変換してチェック）
     const scheduleTemplateId = String(row[3]).trim();
