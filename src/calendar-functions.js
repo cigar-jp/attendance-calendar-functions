@@ -62,6 +62,19 @@ function addEventsFromSpreadsheet() {
     // D列：スケジュール雛形ID を取得（文字列に変換してチェック）
     const scheduleTemplateId = String(row[3]).trim();
 
+    // E列：出勤予定時刻、F列：退勤予定時刻を取得
+    const startTimeStr = row[4];
+    const endTimeStr = row[5];
+
+    if (!startTimeStr || !endTimeStr) {
+      Logger.log(
+        '行 ' +
+          (index + 1) +
+          '：出勤予定時刻または退勤予定時刻が空のためスキップ',
+      );
+      return;
+    }
+
     let title = '';
 
     if (scheduleTemplateId === '0') {
@@ -71,45 +84,37 @@ function addEventsFromSpreadsheet() {
         '行 ' + (index + 1) + '：スケジュール雛形IDが0のためタイトルは「公休」',
       );
     } else {
-      // スケジュール雛形IDが空、または "0" 以外の場合はスケジュールを処理
-      const startTimeStr = row[4];
-      const endTimeStr = row[5];
+      // スケジュール雛形IDが "0" 以外の場合はスケジュールを処理
+      const startDecimal = convertTimeStringToDecimal(startTimeStr);
+      const endDecimal = convertTimeStringToDecimal(endTimeStr);
+      title = startDecimal + '-' + endDecimal;
+      Logger.log(
+        '行 ' +
+          (index + 1) +
+          '：出勤 ' +
+          startTimeStr +
+          ' → ' +
+          startDecimal +
+          ', 退勤 ' +
+          endTimeStr +
+          ' → ' +
+          endDecimal +
+          ' によりタイトル作成: ' +
+          title,
+      );
+    }
 
-      if (!startTimeStr || !endTimeStr) {
-        Logger.log(
-          '行 ' +
-            (index + 1) +
-            '：出勤予定時刻または退勤予定時刻が空のためスキップ',
-        );
-        return;
-      }
-
-      if (startTimeStr && endTimeStr) {
-        const startDecimal = convertTimeStringToDecimal(startTimeStr);
-        const endDecimal = convertTimeStringToDecimal(endTimeStr);
-        title = startDecimal + '-' + endDecimal;
-        Logger.log(
-          '行 ' +
-            (index + 1) +
-            '：出勤 ' +
-            startTimeStr +
-            ' → ' +
-            startDecimal +
-            ', 退勤 ' +
-            endTimeStr +
-            ' → ' +
-            endDecimal +
-            ' によりタイトル作成: ' +
-            title,
-        );
-      } else {
-        Logger.log(
-          '行 ' +
-            (index + 1) +
-            '：出勤予定時刻または退勤予定時刻が不足しているためスキップ',
-        );
-        return;
-      }
+    // 同タイトルの終日イベントがすでに存在するか確認
+    const existingEvents = calendar
+      .getEventsForDay(eventDate)
+      .filter((event) => event.isAllDayEvent() && event.getTitle() === title);
+    if (existingEvents.length > 0) {
+      Logger.log(
+        '行 ' +
+          (index + 1) +
+          '：同じタイトルの終日イベントが既に存在するためスキップ',
+      );
+      return;
     }
 
     // 終日イベントとしてカレンダーにイベントを作成
