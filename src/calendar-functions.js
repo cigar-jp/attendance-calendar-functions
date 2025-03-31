@@ -162,7 +162,9 @@ function addEventsFromSpreadsheet(user) {
       .getEventsForDay(eventDate)
       .filter((event) => event.isAllDayEvent() && event.getTitle() === title);
     if (existingFullDay.length === 0) {
-      calendar.createAllDayEvent(title, eventDate);
+      calendar.createAllDayEvent(title, eventDate, {
+        reminders: { useDefault: false },
+      });
       Logger.log(
         '行 ' +
           (index + 1) +
@@ -206,7 +208,9 @@ function addEventsFromSpreadsheet(user) {
         search: '業務時間外',
       });
       if (morningEvents.length === 0) {
-        calendar.createEvent('業務時間外', dayStart, workingStartTime);
+        calendar.createEvent('業務時間外', dayStart, workingStartTime, {
+          reminders: { useDefault: false },
+        });
         Logger.log(
           '行 ' +
             (index + 1) +
@@ -227,7 +231,9 @@ function addEventsFromSpreadsheet(user) {
         search: '業務時間外',
       });
       if (afternoonEvents.length === 0) {
-        calendar.createEvent('業務時間外', workingEndTime, dayEnd);
+        calendar.createEvent('業務時間外', workingEndTime, dayEnd, {
+          reminders: { useDefault: false },
+        });
         Logger.log(
           '行 ' +
             (index + 1) +
