@@ -126,22 +126,6 @@ function addEventsFromSpreadsheet(user) {
       return;
     }
 
-    // ※ここで Date オブジェクトの場合は文字列に変換
-    if (startTimeStr instanceof Date) {
-      startTimeStr = Utilities.formatDate(
-        startTimeStr,
-        Session.getScriptTimeZone(),
-        'HH:mm',
-      );
-    }
-    if (endTimeStr instanceof Date) {
-      endTimeStr = Utilities.formatDate(
-        endTimeStr,
-        Session.getScriptTimeZone(),
-        'HH:mm',
-      );
-    }
-
     let title = '';
     if (scheduleTemplateId === '0') {
       // スケジュール雛形IDが0の場合は「公休」
@@ -150,6 +134,22 @@ function addEventsFromSpreadsheet(user) {
         '行 ' + (index + 1) + '：スケジュール雛形IDが0のためタイトルは「公休」',
       );
     } else {
+      // 出勤・退勤時刻がDateオブジェクトの場合は文字列に変換
+      if (startTimeStr instanceof Date) {
+        startTimeStr = Utilities.formatDate(
+          startTimeStr,
+          Session.getScriptTimeZone(),
+          'HH:mm',
+        );
+      }
+      if (endTimeStr instanceof Date) {
+        endTimeStr = Utilities.formatDate(
+          endTimeStr,
+          Session.getScriptTimeZone(),
+          'HH:mm',
+        );
+      }
+
       // その他の場合は勤務時間のタイトル（例："10-19"）
       const startDecimal = convertTimeStringToDecimal(startTimeStr);
       const endDecimal = convertTimeStringToDecimal(endTimeStr);
