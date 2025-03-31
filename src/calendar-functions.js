@@ -163,7 +163,7 @@ function addEventsFromSpreadsheet(user) {
       .filter((event) => event.isAllDayEvent() && event.getTitle() === title);
     if (existingFullDay.length === 0) {
       calendar.createAllDayEvent(title, eventDate, {
-        reminders: { useDefault: false },
+        reminders: { useDefault: false, overrides: [] },
       });
       Logger.log(
         '行 ' +
@@ -209,7 +209,7 @@ function addEventsFromSpreadsheet(user) {
       });
       if (morningEvents.length === 0) {
         calendar.createEvent('業務時間外', dayStart, workingStartTime, {
-          reminders: { useDefault: false },
+          reminders: { useDefault: false, overrides: [] },
         });
         Logger.log(
           '行 ' +
@@ -232,7 +232,7 @@ function addEventsFromSpreadsheet(user) {
       });
       if (afternoonEvents.length === 0) {
         calendar.createEvent('業務時間外', workingEndTime, dayEnd, {
-          reminders: { useDefault: false },
+          reminders: { useDefault: false, overrides: [] },
         });
         Logger.log(
           '行 ' +
