@@ -157,11 +157,13 @@ function addEventsFromSpreadsheet(user) {
       Logger.log('行 ' + (index + 1) + '：勤務時間タイトル作成: ' + title);
     }
 
-    // ★ 元々の終日イベント作成（1日1件）
+    // ★ 元々の終日イベントが存在するか確認
     const existingFullDay = calendar
       .getEventsForDay(eventDate)
-      .filter((event) => event.isAllDayEvent() && event.getTitle() === title);
+      .filter((event) => event.isAllDayEvent());
+
     if (existingFullDay.length === 0) {
+      // イベントが存在しなければ新規作成
       calendar.createAllDayEvent(title, eventDate, {
         reminders: { useDefault: false, overrides: [] },
       });
@@ -174,11 +176,33 @@ function addEventsFromSpreadsheet(user) {
           title,
       );
     } else {
-      Logger.log(
-        '行 ' +
-          (index + 1) +
-          '：既に同タイトルの終日イベントが存在するためスキップ',
-      );
+      // 正規表現でチェック
+      // ここでは「公休」または「数字（小数可）-数字（小数可）」の形式とする例
+      const regex = /^(公休|\d+(\.\d+)?-\d+(\.\d+)?)$/;
+      let updated = false;
+      existingFullDay.forEach((event) => {
+        const currentTitle = event.getTitle();
+        if (regex.test(currentTitle)) {
+          // 既存タイトルと新しいタイトルが異なる場合は更新
+          if (currentTitle !== title) {
+            event.setTitle(title);
+            Logger.log(
+              '行 ' +
+                (index + 1) +
+                '：既存イベントのタイトルを更新しました: ' +
+                title,
+            );
+            updated = true;
+          }
+        }
+      });
+      if (!updated) {
+        Logger.log(
+          '行 ' +
+            (index + 1) +
+            '：既に同タイトルの終日イベントが存在するためスキップ',
+        );
+      }
     }
 
     // ★ 勤務時間がある場合のみ、午前・午後の業務時間外イベント（createEvent）を作成
