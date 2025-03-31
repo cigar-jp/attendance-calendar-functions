@@ -117,7 +117,7 @@ function addEventsFromSpreadsheet(user) {
     let startTimeStr = row[4];
     let endTimeStr = row[5];
 
-    if (!startTimeStr || !endTimeStr) {
+    if (scheduleTemplateId !== '0' && (!startTimeStr || !endTimeStr)) {
       Logger.log(
         '行 ' +
           (index + 1) +
