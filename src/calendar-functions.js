@@ -243,9 +243,37 @@ function addEventsFromSpreadsheet(user) {
             '）',
         );
       } else {
-        Logger.log(
-          '行 ' + (index + 1) + '：午前の業務時間外イベントは既に存在',
-        );
+        // 正規表現でタイトルが「業務時間外」であるイベントを対象
+        const regex = /^業務時間外$/;
+        let updated = false;
+        morningEvents.forEach((event) => {
+          if (regex.test(event.getTitle())) {
+            const currentStart = event.getStartTime();
+            const currentEnd = event.getEndTime();
+            // 開始・終了時刻が変わっている場合は更新
+            if (
+              currentStart.getTime() !== dayStart.getTime() ||
+              currentEnd.getTime() !== workingStartTime.getTime()
+            ) {
+              event.setTime(dayStart, workingStartTime);
+              Logger.log(
+                '行 ' +
+                  (index + 1) +
+                  '：午前の業務時間外イベント更新（新: 0～' +
+                  startTimeStr +
+                  '）',
+              );
+              updated = true;
+            }
+          }
+        });
+        if (!updated) {
+          Logger.log(
+            '行 ' +
+              (index + 1) +
+              '：午前の業務時間外イベントは既に最新の状態です',
+          );
+        }
       }
 
       // 午後の業務外イベント：退勤時刻～24:00（翌日0:00）
@@ -266,9 +294,35 @@ function addEventsFromSpreadsheet(user) {
             '～24:00）',
         );
       } else {
-        Logger.log(
-          '行 ' + (index + 1) + '：午後の業務時間外イベントは既に存在',
-        );
+        const regex = /^業務時間外$/;
+        let updated = false;
+        afternoonEvents.forEach((event) => {
+          if (regex.test(event.getTitle())) {
+            const currentStart = event.getStartTime();
+            const currentEnd = event.getEndTime();
+            if (
+              currentStart.getTime() !== workingEndTime.getTime() ||
+              currentEnd.getTime() !== dayEnd.getTime()
+            ) {
+              event.setTime(workingEndTime, dayEnd);
+              Logger.log(
+                '行 ' +
+                  (index + 1) +
+                  '：午後の業務時間外イベント更新（新: ' +
+                  endTimeStr +
+                  '～24:00）',
+              );
+              updated = true;
+            }
+          }
+        });
+        if (!updated) {
+          Logger.log(
+            '行 ' +
+              (index + 1) +
+              '：午後の業務時間外イベントは既に最新の状態です',
+          );
+        }
       }
     }
   });
