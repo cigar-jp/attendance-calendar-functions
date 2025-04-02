@@ -49,42 +49,16 @@ function processAllUsers() {
  * ※A列がプロパティで指定された名前の行のみ処理します。
  */
 function addEventsFromSpreadsheet(user) {
-  // プロジェクトのスクリプト プロパティから定数を取得
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const spreadsheetId = scriptProperties.getProperty('SPREADSHEET_ID'); // スプレッドシートID
-  const targetName = user.name; // 処理対象の名前
-  const calendarId = user.email; // カレンダーID
+  // バリデーションチェック
+  if (!validateInputs(user)) return;
 
-  if (!user || !spreadsheetId) {
-    Logger.log(
-      'プロジェクトのプロパティにSPREADSHEET_ID が設定されていません。',
-    );
-    return;
-  }
+  // スプレッドシートデータの取得
+  const { filteredData, calendar } = getSpreadsheetData(user);
+  if (!filteredData || !calendar) return;
 
-  // スプレッドシートをIDで取得
-  const ss = SpreadsheetApp.openById(spreadsheetId);
-  const sheet = ss.getSheetByName('Sheet1'); // シート名を必要に応じて変更してください
-  if (!sheet) {
-    Logger.log('指定のシートが見つかりません。');
-    return;
-  }
-
-  // シート全体のデータを取得（ヘッダー行を除く）
-  const data = sheet.getDataRange().getValues();
-  Logger.log('全行数: ' + data.length);
-
-  // ヘッダー行を除いたデータをフィルタリング（A列がプロパティで指定された名前の行のみ）
-  const filteredData = data.filter((row, index) => {
-    if (index === 0) return false;
-    return String(row[0]).trim() === targetName;
-  });
-  Logger.log('フィルタ後の行数: ' + filteredData.length);
-
-  // カレンダーを取得
-  const calendar = CalendarApp.getCalendarById(calendarId);
-  if (!calendar) {
-    Logger.log('指定のカレンダーが見つかりません: ' + calendarId);
+  // データが空の場合は早期リターン
+  if (filteredData.length === 0) {
+    Logger.log(`${user.name}の処理対象データが0件のため、処理を終了します。`);
     return;
   }
 
@@ -93,239 +67,289 @@ function addEventsFromSpreadsheet(user) {
 
   // フィルタ済みデータを処理
   filteredData.forEach((row, index) => {
-    Logger.log('=== フィルタ後の行番号: ' + index + ' ===');
+    const rowNum = index + 1;
 
-    // C列：年月日 が空の場合はスキップ
-    const dateStr = row[2];
-    if (!dateStr) {
-      Logger.log('行 ' + (index + 1) + '：日付が空のためスキップ');
-      return;
-    }
-    Logger.log('行 ' + (index + 1) + '：日付 = ' + dateStr);
+    // 基本データの検証
+    const eventDetails = validateEventData(row, rowNum);
+    if (!eventDetails) return;
 
-    // 日付文字列から Date オブジェクトに変換
-    const eventDate = new Date(dateStr);
+    const { eventDate, scheduleTemplateId, startTimeStr, endTimeStr } =
+      eventDetails;
     // 基準日より前の日付の場合はスキップ（必要に応じてコメント解除）
     // if (eventDate < thresholdDate) {
     //   Logger.log('行 ' + (index + 1) + `：${thresholdDate}より前の日付のためスキップ`);
     //   return;
     // }
 
-    // D列：スケジュール雛形ID を取得
-    const scheduleTemplateId = String(row[3]).trim();
-    // E列：出勤予定時刻、F列：退勤予定時刻を取得
-    let startTimeStr = row[4];
-    let endTimeStr = row[5];
+    // イベントタイトルの生成
+    const title = generateEventTitle(
+      scheduleTemplateId,
+      startTimeStr,
+      endTimeStr,
+    );
 
-    if (scheduleTemplateId !== '0' && (!startTimeStr || !endTimeStr)) {
-      Logger.log(
-        '行 ' +
-          (index + 1) +
-          '：出勤予定時刻または退勤予定時刻が空のためスキップ',
-      );
-      return;
-    }
+    // 終日イベントの処理
+    processFullDayEvent(calendar, eventDate, title, rowNum);
 
-    let title = '';
-    if (scheduleTemplateId === '0') {
-      // スケジュール雛形IDが0の場合は「公休」
-      title = '公休';
-      Logger.log(
-        '行 ' + (index + 1) + '：スケジュール雛形IDが0のためタイトルは「公休」',
-      );
-    } else {
-      // 出勤・退勤時刻がDateオブジェクトの場合は文字列に変換
-      if (startTimeStr instanceof Date) {
-        startTimeStr = Utilities.formatDate(
-          startTimeStr,
-          Session.getScriptTimeZone(),
-          'HH:mm',
-        );
-      }
-      if (endTimeStr instanceof Date) {
-        endTimeStr = Utilities.formatDate(
-          endTimeStr,
-          Session.getScriptTimeZone(),
-          'HH:mm',
-        );
-      }
-
-      // その他の場合は勤務時間のタイトル（例："10-19"）
-      const startDecimal = convertTimeStringToDecimal(startTimeStr);
-      const endDecimal = convertTimeStringToDecimal(endTimeStr);
-      title = startDecimal + '-' + endDecimal;
-      Logger.log('行 ' + (index + 1) + '：勤務時間タイトル作成: ' + title);
-    }
-
-    // ★ 元々の終日イベントが存在するか確認
-    const existingFullDay = calendar
-      .getEventsForDay(eventDate)
-      .filter((event) => event.isAllDayEvent());
-
-    if (existingFullDay.length === 0) {
-      // イベントが存在しなければ新規作成
-      calendar.createAllDayEvent(title, eventDate, {
-        reminders: { useDefault: false, overrides: [] },
-      });
-      Logger.log(
-        '行 ' +
-          (index + 1) +
-          '：終日イベント作成: ' +
-          eventDate.toDateString() +
-          ' / タイトル: ' +
-          title,
-      );
-    } else {
-      // 正規表現でチェック
-      // ここでは「公休」または「数字（小数可）-数字（小数可）」の形式とする例
-      const regex = /^(公休|\d+(\.\d+)?-\d+(\.\d+)?)$/;
-      let updated = false;
-      existingFullDay.forEach((event) => {
-        const currentTitle = event.getTitle();
-        if (regex.test(currentTitle)) {
-          // 既存タイトルと新しいタイトルが異なる場合は更新
-          if (currentTitle !== title) {
-            event.setTitle(title);
-            Logger.log(
-              '行 ' +
-                (index + 1) +
-                '：既存イベントのタイトルを更新しました: ' +
-                title,
-            );
-            updated = true;
-          }
-        }
-      });
-      if (!updated) {
-        Logger.log(
-          '行 ' +
-            (index + 1) +
-            '：既に同タイトルの終日イベントが存在するためスキップ',
-        );
-      }
-    }
-
-    // ★ 勤務時間がある場合のみ、午前・午後の業務時間外イベント（createEvent）を作成
+    // 勤務時間がある場合の業務時間外イベント処理
     if (scheduleTemplateId !== '0') {
-      // 出勤・退勤時刻の Date オブジェクトを生成
-      const startParts = startTimeStr.split(':');
-      const endParts = endTimeStr.split(':');
-      let workingStartTime = new Date(eventDate);
-      workingStartTime.setHours(
-        parseInt(startParts[0], 10),
-        parseInt(startParts[1], 10),
-        0,
-        0,
+      processWorkingHoursEvents(
+        calendar,
+        eventDate,
+        startTimeStr,
+        endTimeStr,
+        rowNum,
       );
-      let workingEndTime = new Date(eventDate);
-      workingEndTime.setHours(
-        parseInt(endParts[0], 10),
-        parseInt(endParts[1], 10),
-        0,
-        0,
+    }
+  });
+}
+
+/**
+ * 入力データの基本バリデーション
+ */
+function validateInputs(user) {
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const spreadsheetId = scriptProperties.getProperty('SPREADSHEET_ID');
+
+  if (!user || !spreadsheetId) {
+    Logger.log('必要なプロパティが設定されていません。');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * スプレッドシートデータの取得と基本設定
+ */
+function getSpreadsheetData(user) {
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const spreadsheetId = scriptProperties.getProperty('SPREADSHEET_ID');
+  const targetName = user.name;
+  const calendarId = user.email;
+
+  // スプレッドシートの取得
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = ss.getSheetByName('Sheet1');
+  if (!sheet) {
+    Logger.log('指定のシートが見つかりません。');
+    return { filteredData: null, calendar: null };
+  }
+
+  // データのフィルタリング
+  const data = sheet.getDataRange().getValues();
+  const filteredData = data.filter((row, index) => {
+    if (index === 0) return false;
+    return String(row[0]).trim() === targetName;
+  });
+
+  // カレンダーの取得
+  const calendar = CalendarApp.getCalendarById(calendarId);
+  if (!calendar) {
+    Logger.log('指定のカレンダーが見つかりません: ' + calendarId);
+    return { filteredData: null, calendar: null };
+  }
+
+  return { filteredData, calendar };
+}
+
+/**
+ * イベントデータの検証
+ */
+function validateEventData(row, rowNum) {
+  const dateStr = row[2];
+  if (!dateStr) {
+    Logger.log(`行 ${rowNum}：日付が空のためスキップ`);
+    return null;
+  }
+
+  const eventDate = new Date(dateStr);
+  const scheduleTemplateId = String(row[5]).trim();
+  let startTimeStr = row[6];
+  let endTimeStr = row[7];
+
+  if (scheduleTemplateId !== '0' && (!startTimeStr || !endTimeStr)) {
+    Logger.log(
+      `行 ${rowNum}：出勤予定時刻または退勤予定時刻が空のためスキップ`,
+    );
+    return null;
+  }
+
+  // 時刻フォーマットの統一
+  if (startTimeStr instanceof Date) {
+    startTimeStr = Utilities.formatDate(
+      startTimeStr,
+      Session.getScriptTimeZone(),
+      'HH:mm',
+    );
+  }
+  if (endTimeStr instanceof Date) {
+    endTimeStr = Utilities.formatDate(
+      endTimeStr,
+      Session.getScriptTimeZone(),
+      'HH:mm',
+    );
+  }
+
+  return { eventDate, scheduleTemplateId, startTimeStr, endTimeStr };
+}
+
+/**
+ * イベントタイトルの生成
+ */
+function generateEventTitle(scheduleTemplateId, startTimeStr, endTimeStr) {
+  if (scheduleTemplateId === '0') return '公休';
+
+  const startDecimal = convertTimeStringToDecimal(startTimeStr);
+  const endDecimal = convertTimeStringToDecimal(endTimeStr);
+  return `${startDecimal}-${endDecimal}`;
+}
+
+/**
+ * 終日イベントの処理
+ */
+function processFullDayEvent(calendar, eventDate, title, rowNum) {
+  const existingFullDay = calendar
+    .getEventsForDay(eventDate)
+    .filter((event) => event.isAllDayEvent());
+
+  if (existingFullDay.length === 0) {
+    calendar.createAllDayEvent(title, eventDate, {
+      reminders: { useDefault: false, overrides: [] },
+    });
+    Logger.log(
+      `行 ${rowNum}：終日イベント作成: ${eventDate.toDateString()} / タイトル: ${title}`,
+    );
+    return;
+  }
+
+  const regex = /^(公休|\d+(\.\d+)?-\d+(\.\d+)?)$/;
+  let updated = false;
+
+  existingFullDay.forEach((event) => {
+    const currentTitle = event.getTitle();
+    if (regex.test(currentTitle) && currentTitle !== title) {
+      event.setTitle(title);
+      Logger.log(
+        `行 ${rowNum}：既存イベントのタイトルを更新しました: ${title}`,
       );
+      updated = true;
+    }
+  });
 
-      // 午前の業務外イベント：0:00～出勤時刻
-      let dayStart = new Date(eventDate);
-      dayStart.setHours(0, 0, 0, 0);
-      const morningEvents = calendar.getEvents(dayStart, workingStartTime, {
-        search: '業務時間外',
-      });
-      if (morningEvents.length === 0) {
-        calendar.createEvent('業務時間外', dayStart, workingStartTime, {
-          reminders: { useDefault: false, overrides: [] },
-        });
-        Logger.log(
-          '行 ' +
-            (index + 1) +
-            '：午前の業務時間外イベント作成（0～' +
-            startTimeStr +
-            '）',
-        );
-      } else {
-        // 正規表現でタイトルが「業務時間外」であるイベントを対象
-        const regex = /^業務時間外$/;
-        let updated = false;
-        morningEvents.forEach((event) => {
-          if (regex.test(event.getTitle())) {
-            const currentStart = event.getStartTime();
-            const currentEnd = event.getEndTime();
-            // 開始・終了時刻が変わっている場合は更新
-            if (
-              currentStart.getTime() !== dayStart.getTime() ||
-              currentEnd.getTime() !== workingStartTime.getTime()
-            ) {
-              event.setTime(dayStart, workingStartTime);
-              Logger.log(
-                '行 ' +
-                  (index + 1) +
-                  '：午前の業務時間外イベント更新（新: 0～' +
-                  startTimeStr +
-                  '）',
-              );
-              updated = true;
-            }
-          }
-        });
-        if (!updated) {
-          Logger.log(
-            '行 ' +
-              (index + 1) +
-              '：午前の業務時間外イベントは既に最新の状態です',
-          );
-        }
-      }
+  if (!updated) {
+    Logger.log(`行 ${rowNum}：既存の終日イベントは更新不要です`);
+  }
+}
 
-      // 午後の業務外イベント：退勤時刻～24:00（翌日0:00）
-      let dayEnd = new Date(eventDate);
-      dayEnd.setHours(24, 0, 0, 0);
-      const afternoonEvents = calendar.getEvents(workingEndTime, dayEnd, {
-        search: '業務時間外',
-      });
-      if (afternoonEvents.length === 0) {
-        calendar.createEvent('業務時間外', workingEndTime, dayEnd, {
-          reminders: { useDefault: false, overrides: [] },
-        });
+/**
+ * 業務時間外イベントの処理
+ */
+function processWorkingHoursEvents(
+  calendar,
+  eventDate,
+  startTimeStr,
+  endTimeStr,
+  rowNum,
+) {
+  const times = calculateWorkingTimes(eventDate, startTimeStr, endTimeStr);
+
+  // 午前の業務時間外イベント処理
+  processPeriodEvent(
+    calendar,
+    times.dayStart,
+    times.workingStartTime,
+    rowNum,
+    '午前',
+  );
+
+  // 午後の業務時間外イベント処理
+  processPeriodEvent(
+    calendar,
+    times.workingEndTime,
+    times.dayEnd,
+    rowNum,
+    '午後',
+  );
+}
+
+/**
+ * 業務時間の計算
+ */
+function calculateWorkingTimes(eventDate, startTimeStr, endTimeStr) {
+  const startParts = startTimeStr.split(':');
+  const endParts = endTimeStr.split(':');
+
+  let dayStart = new Date(eventDate);
+  dayStart.setHours(0, 0, 0, 0);
+
+  let dayEnd = new Date(eventDate);
+  dayEnd.setHours(24, 0, 0, 0);
+
+  let workingStartTime = new Date(eventDate);
+  workingStartTime.setHours(
+    parseInt(startParts[0], 10),
+    parseInt(startParts[1], 10),
+    0,
+    0,
+  );
+
+  let workingEndTime = new Date(eventDate);
+  workingEndTime.setHours(
+    parseInt(endParts[0], 10),
+    parseInt(endParts[1], 10),
+    0,
+    0,
+  );
+
+  return { dayStart, dayEnd, workingStartTime, workingEndTime };
+}
+
+/**
+ * 特定期間のイベント処理（午前・午後共通）
+ */
+function processPeriodEvent(calendar, startTime, endTime, rowNum, period) {
+  const events = calendar.getEvents(startTime, endTime, {
+    search: '業務時間外',
+  });
+  const timeStr =
+    period === '午前'
+      ? `0～${Utilities.formatDate(endTime, Session.getScriptTimeZone(), 'HH:mm')}`
+      : `${Utilities.formatDate(startTime, Session.getScriptTimeZone(), 'HH:mm')}～24:00`;
+
+  if (events.length === 0) {
+    calendar.createEvent('業務時間外', startTime, endTime, {
+      reminders: { useDefault: false, overrides: [] },
+    });
+    Logger.log(`行 ${rowNum}：${period}の業務時間外イベント作成（${timeStr}）`);
+    return;
+  }
+
+  const regex = /^業務時間外$/;
+  let updated = false;
+
+  events.forEach((event) => {
+    if (regex.test(event.getTitle())) {
+      const currentStart = event.getStartTime();
+      const currentEnd = event.getEndTime();
+
+      if (
+        currentStart.getTime() !== startTime.getTime() ||
+        currentEnd.getTime() !== endTime.getTime()
+      ) {
+        event.setTime(startTime, endTime);
         Logger.log(
-          '行 ' +
-            (index + 1) +
-            '：午後の業務時間外イベント作成（' +
-            endTimeStr +
-            '～24:00）',
+          `行 ${rowNum}：${period}の業務時間外イベント更新（新: ${timeStr}）`,
         );
-      } else {
-        const regex = /^業務時間外$/;
-        let updated = false;
-        afternoonEvents.forEach((event) => {
-          if (regex.test(event.getTitle())) {
-            const currentStart = event.getStartTime();
-            const currentEnd = event.getEndTime();
-            if (
-              currentStart.getTime() !== workingEndTime.getTime() ||
-              currentEnd.getTime() !== dayEnd.getTime()
-            ) {
-              event.setTime(workingEndTime, dayEnd);
-              Logger.log(
-                '行 ' +
-                  (index + 1) +
-                  '：午後の業務時間外イベント更新（新: ' +
-                  endTimeStr +
-                  '～24:00）',
-              );
-              updated = true;
-            }
-          }
-        });
-        if (!updated) {
-          Logger.log(
-            '行 ' +
-              (index + 1) +
-              '：午後の業務時間外イベントは既に最新の状態です',
-          );
-        }
+        updated = true;
       }
     }
   });
+
+  if (!updated) {
+    Logger.log(
+      `行 ${rowNum}：${period}の業務時間外イベントは既に最新の状態です`,
+    );
+  }
 }
 
 /**
@@ -336,15 +360,13 @@ function addEventsFromSpreadsheet(user) {
  * @return {string} 小数表記の時刻文字列
  */
 function convertTimeStringToDecimal(timeStr) {
-  Logger.log('convertTimeStringToDecimal: ' + timeStr);
-
+  // Dateオブジェクトの場合は文字列に変換
   if (timeStr instanceof Date) {
     timeStr = Utilities.formatDate(
       timeStr,
       Session.getScriptTimeZone(),
       'HH:mm',
     );
-    Logger.log('変換後の timeStr: ' + timeStr);
   }
 
   const parts = timeStr.split(':');
