@@ -36,27 +36,29 @@ async function processLatestAttendanceData() {
       }
 
       const attachments = mail.getAttachments();
-      const zipFile = attachments.find((attachment) =>
-        attachment.getName().startsWith('jinjer_汎用データ_'),
+      const foundAttachment = attachments.find((attachment) =>
+        attachment
+          .getName()
+          .startsWith('汎用データ(まるめ適用後)ダウンロード_'),
       );
 
-      if (!zipFile) {
-        Logger.log('Zipファイルが見つかりません');
+      if (!foundAttachment) {
+        Logger.log('対象のCSVファイルが見つかりません');
         continue;
       }
 
-      // 一時フォルダを作成
-      const tempFolderName = 'temp_' + new Date().getTime();
-      const tempFolder = DriveApp.createFolder(tempFolderName);
-
       try {
-        // Zipファイルを解凍
-        const zipBlob = zipFile.copyBlob();
-        const unzippedFiles = Utilities.unzip(zipBlob);
+        // ZIPファイルを解凍
+        const zipBlob = foundAttachment.copyBlob();
+        const zipData = zipBlob.getBytes();
+
+        // Zlibを使用してZIPを解凍
+        const unzip = new Zlib.Unzip(zipData);
+        const filenames = unzip.getFilenames();
 
         // CSVファイルを探す
-        const csvFile = unzippedFiles.find((file) =>
-          file.getName().startsWith('汎用データ(まるめ適用後)ダウンロード_'),
+        const csvFile = filenames.find((name) =>
+          name.startsWith('汎用データ(まるめ適用後)ダウンロード_'),
         );
 
         if (!csvFile) {
@@ -64,12 +66,21 @@ async function processLatestAttendanceData() {
           continue;
         }
 
-        // CSVデータを処理
-        const csvData = csvFile.getDataAsString();
-        const formattedData = formatCsvData(csvData);
+        // CSVを解凍してShiftJISでデコード
+        const csvData = unzip.decompress(csvFile);
+        const csvString =
+          Utilities.newBlob(csvData).getDataAsString('Shift_JIS');
+
+        // CSVの妥当性チェック
+        if (!csvString.includes('従業員番号')) {
+          Logger.log('CSVデータの形式が不正です');
+          continue;
+        }
+
+        const formattedData = formatCsvData(csvString);
 
         // CSVデータから対象月を判定
-        const months = getDataMonths(csvData);
+        const months = getDataMonths(csvString);
         if (!months || months.length === 0) {
           Logger.log('CSVデータから月の判定ができません');
           continue;
@@ -104,16 +115,18 @@ async function processLatestAttendanceData() {
           }
         }
 
-        if (allDiffData.length === 0) {
+        if (allDiffData.length > 0) {
+          // カレンダー更新を実行
+          processAllUsers(allDiffData);
+        } else {
           Logger.log('処理対象の差分は検出されませんでした');
-          continue;
         }
-
-        // カレンダー更新を実行
-        processAllUsers(allDiffData);
-      } finally {
-        // 一時フォルダを削除
-        tempFolder.setTrashed(true);
+      } catch (error) {
+        Logger.log('処理中にエラーが発生しました: ' + error.message);
+        if (error.details) {
+          Logger.log('エラー詳細: ' + JSON.stringify(error.details));
+        }
+        continue;
       }
     }
   } catch (error) {
@@ -363,12 +376,6 @@ function addEventsFromSpreadsheet(user, diffData) {
     return;
   }
 
-  // データが空の場合は早期リターン
-  if (filteredData.length === 0) {
-    Logger.log(`${user.name}の処理対象データが0件のため、処理を終了します。`);
-    return;
-  }
-
   // 基準日（必要に応じて調整）
   const thresholdDate = new Date('2025-03-14');
 
@@ -423,40 +430,6 @@ function validateInputs(user) {
     return false;
   }
   return true;
-}
-
-/**
- * スプレッドシートデータの取得と基本設定
- */
-function getSpreadsheetData(user) {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const spreadsheetId = scriptProperties.getProperty('SPREADSHEET_ID');
-  const targetName = user.name;
-  const calendarId = user.email;
-
-  // スプレッドシートの取得
-  const ss = SpreadsheetApp.openById(spreadsheetId);
-  const sheet = ss.getSheetByName('Sheet1');
-  if (!sheet) {
-    Logger.log('指定のシートが見つかりません。');
-    return { filteredData: null, calendar: null };
-  }
-
-  // データのフィルタリング
-  const data = sheet.getDataRange().getValues();
-  const filteredData = data.filter((row, index) => {
-    if (index === 0) return false;
-    return String(row[0]).trim() === targetName;
-  });
-
-  // カレンダーの取得
-  const calendar = CalendarApp.getCalendarById(calendarId);
-  if (!calendar) {
-    Logger.log('指定のカレンダーが見つかりません: ' + calendarId);
-    return { filteredData: null, calendar: null };
-  }
-
-  return { filteredData, calendar };
 }
 
 /**
