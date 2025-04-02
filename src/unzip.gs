@@ -1,8 +1,5 @@
-/**
- * Zlib名前空間
- * @namespace
- */
-const Zlib = {};
+// グローバルスコープに定義
+var Zlib = this.Zlib || {};
 
 /**
  * Unzipクラスとユーティリティの実装
@@ -128,14 +125,9 @@ const Zlib = {};
       ? input.subarray(offset, offset + this.fileNameLength)
       : input.slice(offset, offset + this.fileNameLength);
 
-    try {
-      // Try to decode as Shift_JIS first
-      const decoder = new TextDecoder('shift-jis');
-      this.filename = decoder.decode(new Uint8Array(filenameBytes));
-    } catch (e) {
-      // Fallback to default encoding if Shift_JIS fails
-      this.filename = String.fromCharCode.apply(null, filenameBytes);
-    }
+    // GAS用のShift_JISデコード処理
+    this.filename =
+      Utilities.newBlob(filenameBytes).getDataAsString('SHIFT_JIS');
     offset += this.fileNameLength;
     this.extraField = input.slice(offset, offset + this.extraFieldLength);
     offset += this.extraFieldLength;
@@ -198,14 +190,9 @@ const Zlib = {};
       ? input.subarray(offset, offset + this.fileNameLength)
       : input.slice(offset, offset + this.fileNameLength);
 
-    try {
-      // Try to decode as Shift_JIS first
-      const decoder = new TextDecoder('shift-jis');
-      this.filename = decoder.decode(new Uint8Array(filenameBytes));
-    } catch (e) {
-      // Fallback to default encoding if Shift_JIS fails
-      this.filename = String.fromCharCode.apply(null, filenameBytes);
-    }
+    // GAS用のShift_JISデコード処理
+    this.filename =
+      Utilities.newBlob(filenameBytes).getDataAsString('SHIFT_JIS');
     offset += this.fileNameLength;
     this.extraField = input.slice(offset, offset + this.extraFieldLength);
     offset += this.extraFieldLength;
@@ -271,11 +258,9 @@ const Zlib = {};
             : input.slice(offset, offset + size);
           break;
         case Compression.DEFLATE:
-          output = new Inflate(input, {
-            index: offset,
-            bufferSize: fileHeader.plainSize,
-          }).decompress();
-          break;
+          throw new Error(
+            'DEFLATE compression is not supported in GAS environment',
+          );
         default:
           throw new Error(
             'unknown compression type: ' + fileHeader.compression,
@@ -414,6 +399,3 @@ const Zlib = {};
   Zlib.Unzip.prototype.Y = Zlib.Unzip.prototype.getFilenames;
   Zlib.Unzip.prototype.L = Zlib.Unzip.prototype.setPassword;
 }).call(this);
-
-// モジュールとしてエクスポート
-export { Zlib };
