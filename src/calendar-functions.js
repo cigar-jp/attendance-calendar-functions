@@ -37,13 +37,11 @@ async function processLatestAttendanceData() {
 
       const attachments = mail.getAttachments();
       const foundAttachment = attachments.find((attachment) =>
-        attachment
-          .getName()
-          .startsWith('汎用データ(まるめ適用後)ダウンロード_'),
+        attachment.getName().startsWith('jinjer_汎用データ_'),
       );
 
       if (!foundAttachment) {
-        Logger.log('対象のCSVファイルが見つかりません');
+        Logger.log('対象のzipファイルが見つかりません');
         continue;
       }
 
@@ -56,6 +54,7 @@ async function processLatestAttendanceData() {
         const unzip = new Zlib.Unzip(zipData);
         const filenames = unzip.getFilenames();
 
+        Logger.log('ZIPファイル内のファイル名: ' + filenames.join(', '));
         // CSVファイルを探す
         const csvFile = filenames.find((name) =>
           name.startsWith('汎用データ(まるめ適用後)ダウンロード_'),
