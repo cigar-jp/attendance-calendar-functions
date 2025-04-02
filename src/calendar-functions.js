@@ -5,66 +5,106 @@ async function processLatestAttendanceData() {
   // メールを検索
   const query =
     'label:jinjer勤怠 subject:"【jinjer勤怠】汎用データ_ダウンロード処理完了通知"';
-  const threads = GmailApp.search(query, 0, 1);
+  const threads = GmailApp.search(query);
 
   if (threads.length === 0) {
     Logger.log('対象のメールが見つかりません');
     return;
   }
 
-  // 最新のメールを取得
-  const latestMail = threads[0].getMessages()[threads[0].getMessageCount() - 1];
-  const attachments = latestMail.getAttachments();
-  const zipFile = attachments.find((attachment) =>
-    attachment.getName().startsWith('jinjer_汎用データ_'),
-  );
+  // 今日の日付を取得
+  const today = new Date();
+  const todayStr = Utilities.formatDate(today, 'Asia/Tokyo', 'yyyy/MM/dd');
 
-  if (!zipFile) {
-    Logger.log('Zipファイルが見つかりません');
-    return;
-  }
+  // 最新2件のメールを処理
+  const latestMails = threads
+    .slice(0, 2)
+    .map((thread) => thread.getMessages()[thread.getMessageCount() - 1]);
 
-  // 一時フォルダを作成
-  const tempFolderName = 'temp_' + new Date().getTime();
-  const tempFolder = DriveApp.createFolder(tempFolderName);
-
-  try {
-    // Zipファイルを解凍
-    const zipBlob = zipFile.copyBlob();
-    const unzippedFiles = Utilities.unzip(zipBlob);
-
-    // CSVファイルを探す
-    const csvFile = unzippedFiles.find((file) =>
-      file.getName().startsWith('汎用データ(まるめ適用後)ダウンロード_'),
+  for (const mail of latestMails) {
+    const receivedDate = mail.getDate();
+    const receivedDateStr = Utilities.formatDate(
+      receivedDate,
+      'Asia/Tokyo',
+      'yyyy/MM/dd',
     );
 
-    if (!csvFile) {
-      Logger.log('CSVファイルが見つかりません');
-      return;
+    // 今日受信したメールのみ処理
+    if (receivedDateStr !== todayStr) {
+      continue;
     }
 
-    // CSVデータを処理
-    const csvData = csvFile.getDataAsString();
-    const formattedData = formatCsvData(csvData);
+    const attachments = mail.getAttachments();
+    const zipFile = attachments.find((attachment) =>
+      attachment.getName().startsWith('jinjer_汎用データ_'),
+    );
 
-    // シートを更新
-    updateSheets(formattedData);
-
-    // 差分を抽出
-    const diffData = extractDifferences();
-    if (!diffData || diffData.length === 0) {
-      Logger.log('差分は検出されませんでした');
-      return;
+    if (!zipFile) {
+      Logger.log('Zipファイルが見つかりません');
+      continue;
     }
 
-    // カレンダー更新を実行
-    processAllUsers(diffData);
-  } catch (error) {
-    Logger.log('エラーが発生しました: ' + error.message);
-    throw error;
-  } finally {
-    // 一時フォルダを削除
-    tempFolder.setTrashed(true);
+    // 一時フォルダを作成
+    const tempFolderName = 'temp_' + new Date().getTime();
+    const tempFolder = DriveApp.createFolder(tempFolderName);
+
+    try {
+      // Zipファイルを解凍
+      const zipBlob = zipFile.copyBlob();
+      const unzippedFiles = Utilities.unzip(zipBlob);
+
+      // CSVファイルを探す
+      const csvFile = unzippedFiles.find((file) =>
+        file.getName().startsWith('汎用データ(まるめ適用後)ダウンロード_'),
+      );
+
+      if (!csvFile) {
+        Logger.log('CSVファイルが見つかりません');
+        continue;
+      }
+
+      // CSVデータを処理
+      const csvData = csvFile.getDataAsString();
+      const formattedData = formatCsvData(csvData);
+
+      // CSVの内容から今月・来月を判断
+      const rows = Utilities.parseCsv(csvData);
+      if (rows.length < 2) {
+        Logger.log('CSVデータが不正です（データ行がありません）');
+        continue;
+      }
+
+      const firstDataRow = rows[1]; // ヘッダー行を除いた最初の行
+      const dateStr = firstDataRow[2]; // 日付列
+      const today = new Date();
+      const dataDate = new Date(dateStr);
+      const isNextMonth = dataDate.getMonth() !== today.getMonth();
+
+      Logger.log(`処理: ${isNextMonth ? '来月' : '今月'}分のデータ`);
+
+      // シートを更新
+      updateSheets(formattedData, isNextMonth);
+
+      // 差分を抽出
+      const diffData = extractDifferences(isNextMonth);
+      if (!diffData || diffData.length === 0) {
+        Logger.log(
+          isNextMonth
+            ? '来月分の差分は検出されませんでした'
+            : '今月分の差分は検出されませんでした',
+        );
+        continue;
+      }
+
+      // カレンダー更新を実行
+      processAllUsers(diffData);
+    } catch (error) {
+      Logger.log('エラーが発生しました: ' + error.message);
+      throw error;
+    } finally {
+      // 一時フォルダを削除
+      tempFolder.setTrashed(true);
+    }
   }
 }
 
@@ -87,14 +127,16 @@ function formatCsvData(csvString) {
 /**
  * シートの更新処理
  */
-function updateSheets(newData) {
+function updateSheets(newData, isNextMonth) {
   const ss = SpreadsheetApp.openById(
     PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'),
   );
 
+  const prefix = isNextMonth ? '来月_' : '今月_';
+
   // 既存のシートを更新
-  const yesterdaySheet = ss.getSheetByName('昨日分');
-  const todaySheet = ss.getSheetByName('今日分');
+  const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
+  const todaySheet = ss.getSheetByName(prefix + '今日分');
 
   if (todaySheet) {
     if (yesterdaySheet) {
@@ -102,14 +144,14 @@ function updateSheets(newData) {
     }
     // 今日分を昨日分にコピー
     const newYesterdaySheet = todaySheet.copyTo(ss);
-    newYesterdaySheet.setName('昨日分');
+    newYesterdaySheet.setName(prefix + '昨日分');
 
     // 既存の今日分を削除
     ss.deleteSheet(todaySheet);
   }
 
   // 新しいデータを今日分として保存
-  const newTodaySheet = ss.insertSheet('今日分');
+  const newTodaySheet = ss.insertSheet(prefix + '今日分');
   newTodaySheet
     .getRange(1, 1, newData.length, newData[0].length)
     .setValues(newData);
@@ -118,12 +160,13 @@ function updateSheets(newData) {
 /**
  * 差分を抽出する
  */
-function extractDifferences() {
+function extractDifferences(isNextMonth) {
   const ss = SpreadsheetApp.openById(
     PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'),
   );
-  const yesterdaySheet = ss.getSheetByName('昨日分');
-  const todaySheet = ss.getSheetByName('今日分');
+  const prefix = isNextMonth ? '来月_' : '今月_';
+  const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
+  const todaySheet = ss.getSheetByName(prefix + '今日分');
 
   if (!yesterdaySheet || !todaySheet) {
     Logger.log('昨日分または今日分のシートが見つかりません');
@@ -177,11 +220,12 @@ function extractDifferences() {
 
   // 差分があれば新しいシートとして保存
   if (differences.length > 0) {
-    const diffSheet = ss.getSheetByName('Sheet1');
+    const sheetName = isNextMonth ? 'Sheet1_来月' : 'Sheet1_今月';
+    const diffSheet = ss.getSheetByName(sheetName);
     if (diffSheet) {
       ss.deleteSheet(diffSheet);
     }
-    const newDiffSheet = ss.insertSheet('Sheet1');
+    const newDiffSheet = ss.insertSheet(sheetName);
     newDiffSheet
       .getRange(1, 1, differences.length, differences[0].length)
       .setValues(differences);
