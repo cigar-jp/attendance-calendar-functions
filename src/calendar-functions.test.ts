@@ -98,19 +98,50 @@ describe('カレンダー機能のテスト', () => {
 
   describe('シート名生成のテスト', () => {
     const testCases = [
-      { isNextMonth: true, type: '今日分', expected: '来月_今日分' },
-      { isNextMonth: true, type: '昨日分', expected: '来月_昨日分' },
-      { isNextMonth: false, type: '今日分', expected: '今月_今日分' },
-      { isNextMonth: false, type: '昨日分', expected: '今月_昨日分' },
+      { month: 4, type: '今日分', expected: '4月_今日分' },
+      { month: 4, type: '昨日分', expected: '4月_昨日分' },
+      { month: 5, type: '今日分', expected: '5月_今日分' },
+      { month: 5, type: '昨日分', expected: '5月_昨日分' },
+      { month: 12, type: '今日分', expected: '12月_今日分' },
     ];
 
-    testCases.forEach(({ isNextMonth, type, expected }) => {
+    testCases.forEach(({ month, type, expected }) => {
       it(`${expected}のシート名を正しく生成できる`, () => {
-        const sheetName = (isNextMonth: boolean, type: string) =>
-          (isNextMonth ? '来月_' : '今月_') + type;
-
-        const result = sheetName(isNextMonth, type);
+        const sheetName = (month: number, type: string) => `${month}月_${type}`;
+        const result = sheetName(month, type);
         expect(result).toBe(expected);
+      });
+    });
+  });
+
+  describe('シート名から月の抽出テスト', () => {
+    const testCases = [
+      { sheetName: '4月_今日分', expected: 4 },
+      { sheetName: '5月_昨日分', expected: 5 },
+      { sheetName: '12月_今日分', expected: 12 },
+    ];
+
+    testCases.forEach(({ sheetName, expected }) => {
+      it(`${sheetName}から月を正しく抽出できる`, () => {
+        const matches = sheetName.match(/(\d+)月/);
+        if (!matches) {
+          throw new Error(`シート名から月を抽出できません: ${sheetName}`);
+        }
+        const month = parseInt(matches[1]);
+        expect(month).toBe(expected);
+      });
+
+      it(`不正なシート名でエラーが発生する`, () => {
+        const invalidSheetName = 'invalid_sheet_name';
+        expect(() => {
+          const matches = invalidSheetName.match(/(\d+)月/);
+          if (!matches) {
+            throw new Error(
+              `シート名から月を抽出できません: ${invalidSheetName}`,
+            );
+          }
+          return parseInt(matches[1]);
+        }).toThrow('シート名から月を抽出できません');
       });
     });
   });
