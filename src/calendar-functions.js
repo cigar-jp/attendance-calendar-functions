@@ -1,4 +1,202 @@
-function processAllUsers() {
+/**
+ * メールから最新の勤怠データを取得し処理する
+ */
+async function processLatestAttendanceData() {
+  // メールを検索
+  const query =
+    'label:jinjer勤怠 subject:"【jinjer勤怠】汎用データ_ダウンロード処理完了通知"';
+  const threads = GmailApp.search(query, 0, 1);
+
+  if (threads.length === 0) {
+    Logger.log('対象のメールが見つかりません');
+    return;
+  }
+
+  // 最新のメールを取得
+  const latestMail = threads[0].getMessages()[threads[0].getMessageCount() - 1];
+  const attachments = latestMail.getAttachments();
+  const zipFile = attachments.find((attachment) =>
+    attachment.getName().startsWith('jinjer_汎用データ_'),
+  );
+
+  if (!zipFile) {
+    Logger.log('Zipファイルが見つかりません');
+    return;
+  }
+
+  // 一時フォルダを作成
+  const tempFolderName = 'temp_' + new Date().getTime();
+  const tempFolder = DriveApp.createFolder(tempFolderName);
+
+  try {
+    // Zipファイルを解凍
+    const zipBlob = zipFile.copyBlob();
+    const unzippedFiles = Utilities.unzip(zipBlob);
+
+    // CSVファイルを探す
+    const csvFile = unzippedFiles.find((file) =>
+      file.getName().startsWith('汎用データ(まるめ適用後)ダウンロード_'),
+    );
+
+    if (!csvFile) {
+      Logger.log('CSVファイルが見つかりません');
+      return;
+    }
+
+    // CSVデータを処理
+    const csvData = csvFile.getDataAsString();
+    const formattedData = formatCsvData(csvData);
+
+    // シートを更新
+    updateSheets(formattedData);
+
+    // 差分を抽出
+    const diffData = extractDifferences();
+    if (!diffData || diffData.length === 0) {
+      Logger.log('差分は検出されませんでした');
+      return;
+    }
+
+    // カレンダー更新を実行
+    processAllUsers(diffData);
+  } catch (error) {
+    Logger.log('エラーが発生しました: ' + error.message);
+    throw error;
+  } finally {
+    // 一時フォルダを削除
+    tempFolder.setTrashed(true);
+  }
+}
+
+/**
+ * CSVデータを整形する
+ */
+function formatCsvData(csvString) {
+  const rows = Utilities.parseCsv(csvString);
+
+  // ヘッダー行を取得し、I列以降を除外
+  const headers = rows[0].slice(0, 8);
+
+  // データ行を処理
+  return rows.slice(1).map((row) => {
+    const formattedRow = row.slice(0, 8); // I列以降を除外
+    return formattedRow;
+  });
+}
+
+/**
+ * シートの更新処理
+ */
+function updateSheets(newData) {
+  const ss = SpreadsheetApp.openById(
+    PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'),
+  );
+
+  // 既存のシートを更新
+  const yesterdaySheet = ss.getSheetByName('昨日分');
+  const todaySheet = ss.getSheetByName('今日分');
+
+  if (todaySheet) {
+    if (yesterdaySheet) {
+      yesterdaySheet.clear();
+    }
+    // 今日分を昨日分にコピー
+    const newYesterdaySheet = todaySheet.copyTo(ss);
+    newYesterdaySheet.setName('昨日分');
+
+    // 既存の今日分を削除
+    ss.deleteSheet(todaySheet);
+  }
+
+  // 新しいデータを今日分として保存
+  const newTodaySheet = ss.insertSheet('今日分');
+  newTodaySheet
+    .getRange(1, 1, newData.length, newData[0].length)
+    .setValues(newData);
+}
+
+/**
+ * 差分を抽出する
+ */
+function extractDifferences() {
+  const ss = SpreadsheetApp.openById(
+    PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'),
+  );
+  const yesterdaySheet = ss.getSheetByName('昨日分');
+  const todaySheet = ss.getSheetByName('今日分');
+
+  if (!yesterdaySheet || !todaySheet) {
+    Logger.log('昨日分または今日分のシートが見つかりません');
+    return null;
+  }
+
+  const yesterdayData = yesterdaySheet.getDataRange().getValues();
+  const todayData = todaySheet.getDataRange().getValues();
+
+  // 差分を格納する配列
+  const differences = [];
+
+  // 今日のデータを処理
+  for (let i = 1; i < todayData.length; i++) {
+    const todayRow = todayData[i];
+    const key = `${todayRow[0]}_${todayRow[2]}`; // 名前と日付の組み合わせ
+
+    // 昨日のデータから対応する行を探す
+    const yesterdayRow = yesterdayData.find(
+      (row, index) => index > 0 && `${row[0]}_${row[2]}` === key,
+    );
+
+    // 新規登録または変更があった場合
+    if (
+      !yesterdayRow ||
+      yesterdayRow[5] !== todayRow[5] || // スケジュールテンプレートID
+      yesterdayRow[6] !== todayRow[6] || // 出勤予定時刻
+      yesterdayRow[7] !== todayRow[7]
+    ) {
+      // 退勤予定時刻
+      differences.push(todayRow);
+    }
+  }
+
+  // 昨日あって今日ない予定を検出（削除された予定）
+  for (let i = 1; i < yesterdayData.length; i++) {
+    const yesterdayRow = yesterdayData[i];
+    const key = `${yesterdayRow[0]}_${yesterdayRow[2]}`; // 名前と日付の組み合わせ
+
+    // 今日のデータに存在しない場合
+    const exists = todayData.some(
+      (row, index) => index > 0 && `${row[0]}_${row[2]}` === key,
+    );
+
+    if (!exists) {
+      // 削除マーカーを付与して差分に追加
+      yesterdayRow.push('DELETE');
+      differences.push(yesterdayRow);
+    }
+  }
+
+  // 差分があれば新しいシートとして保存
+  if (differences.length > 0) {
+    const diffSheet = ss.getSheetByName('Sheet1');
+    if (diffSheet) {
+      ss.deleteSheet(diffSheet);
+    }
+    const newDiffSheet = ss.insertSheet('Sheet1');
+    newDiffSheet
+      .getRange(1, 1, differences.length, differences[0].length)
+      .setValues(differences);
+  }
+
+  return differences;
+}
+
+function processAllUsers(diffData) {
+  // 差分データがない場合は処理を終了
+  if (!diffData || diffData.length === 0) {
+    Logger.log('処理対象のデータがありません');
+    return;
+  }
+
   // ユーザーマップ
   const usersMap = [
     { name: '福田 真一', email: 's.fukuda@izumogroup.co.jp' },
@@ -38,7 +236,7 @@ function processAllUsers() {
   usersMap.forEach((user) => {
     Logger.log('処理開始: ' + user.name + ' (' + user.email + ')');
     // イベント追加処理を実行
-    addEventsFromSpreadsheet(user);
+    addEventsFromSpreadsheet(user, diffData);
   });
 
   Logger.log('全ユーザーの処理が完了しました');
@@ -48,13 +246,25 @@ function processAllUsers() {
  * スプレッドシートからデータを取得し、Google カレンダーにイベントとして登録する
  * ※A列がプロパティで指定された名前の行のみ処理します。
  */
-function addEventsFromSpreadsheet(user) {
+function addEventsFromSpreadsheet(user, diffData) {
   // バリデーションチェック
   if (!validateInputs(user)) return;
 
-  // スプレッドシートデータの取得
-  const { filteredData, calendar } = getSpreadsheetData(user);
-  if (!filteredData || !calendar) return;
+  // カレンダーの取得
+  const calendar = CalendarApp.getCalendarById(user.email);
+  if (!calendar) {
+    Logger.log('指定のカレンダーが見つかりません: ' + user.email);
+    return;
+  }
+
+  // ユーザーの差分データを抽出
+  const filteredData = diffData.filter(
+    (row) => String(row[0]).trim() === user.name,
+  );
+  if (filteredData.length === 0) {
+    Logger.log(`${user.name}の処理対象データが0件のため、処理を終了します。`);
+    return;
+  }
 
   // データが空の場合は早期リターン
   if (filteredData.length === 0) {
@@ -382,4 +592,31 @@ function convertTimeStringToDecimal(timeStr) {
   } else {
     return (hours + minutes / 60).toFixed(2);
   }
+}
+
+/**
+ * トリガーの設定を行う関数
+ */
+function setupTrigger() {
+  // 既存のトリガーを全て削除
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach((trigger) => {
+    if (trigger.getHandlerFunction() === 'processLatestAttendanceData') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // 新しいトリガーを作成（毎日午前6時に実行）
+  ScriptApp.newTrigger('processLatestAttendanceData')
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)
+    .create();
+
+  // エラー通知の設定
+  const scriptProperties = PropertiesService.getScriptProperties();
+  scriptProperties.setProperty(
+    'NOTIFICATION_EMAIL',
+    'izm.master@izumogroup.co.jp',
+  );
 }
