@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
-import type { HttpFunction } from '@google-cloud/functions-framework';
+import type { Request, Response } from 'express';
+import type { HttpFunction } from '@google-cloud/functions-framework/build/src/functions';
 import { Storage } from '@google-cloud/storage';
 import { createLogger } from './logger';
 import { USERS_MAP } from './config';
@@ -37,9 +38,19 @@ interface CloudContext {
  * メイン処理のCloud Function
  */
 export const processAttendanceData: HttpFunction = async (
-  event: CloudStorageEvent,
-  context: CloudContext,
+  req: Request,
+  res: Response,
 ) => {
+  // リクエストのバリデーション
+  if (!req.body || !req.body.bucket || !req.body.name) {
+    res.status(400).json({
+      success: false,
+      error: 'リクエストが不正です',
+    });
+    return;
+  }
+
+  const event = req.body as CloudStorageEvent;
   const startTime = new Date().toISOString();
   const report: ExecutionReport = {
     startTime,
@@ -50,7 +61,7 @@ export const processAttendanceData: HttpFunction = async (
   };
 
   try {
-    logger.logStart('processAttendanceData', { event, context });
+    logger.logStart('processAttendanceData', { event });
 
     // 環境設定を取得
     const config = getConfig();
@@ -123,6 +134,10 @@ export const processAttendanceData: HttpFunction = async (
     report.processedFiles = 1;
     report.endTime = new Date().toISOString();
     logger.logComplete('processAttendanceData', report);
+    res.status(200).json({
+      success: true,
+      report,
+    });
   } catch (error) {
     report.endTime = new Date().toISOString();
     report.errors.push({
@@ -133,7 +148,11 @@ export const processAttendanceData: HttpFunction = async (
     });
 
     logger.logFailure('processAttendanceData', error as Error, report);
-    throw error;
+    res.status(500).json({
+      success: false,
+      report,
+      error: error instanceof Error ? error.message : '不明なエラー',
+    });
   }
 };
 
@@ -141,7 +160,7 @@ export const processAttendanceData: HttpFunction = async (
  * カレンダー更新を処理
  */
 async function processCalendarUpdates(
-  calendarHandler: any,
+  calendarHandler: ReturnType<typeof createCalendarHandler>,
   differences: DiffData[],
 ): Promise<void> {
   // ユーザーごとにデータをグループ化
@@ -225,17 +244,18 @@ async function processCalendarUpdates(
  * PubSubトリガーのCloud Function
  */
 export const scheduledAttendanceUpdate: HttpFunction = async (
-  _event: unknown,
-  context: CloudContext,
+  req: Request,
+  res: Response,
 ) => {
   try {
-    logger.logStart('scheduledAttendanceUpdate', { context });
+    logger.logStart('scheduledAttendanceUpdate', { body: req.body });
 
     // メイン処理を呼び出し
     // 注: 実際のPubSub実装では、トリガー条件に応じた処理を実装
     logger.logComplete('scheduledAttendanceUpdate');
+    res.status(200).send('OK');
   } catch (error) {
     logger.logFailure('scheduledAttendanceUpdate', error as Error);
-    throw error;
+    res.status(500).send(error);
   }
 };
