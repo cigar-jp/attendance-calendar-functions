@@ -30,9 +30,26 @@ npm install
 2. 環境変数の設定
 
 ```bash
-export SPREADSHEET_ID="your-spreadsheet-id"
-export GOOGLE_CLOUD_PROJECT="your-project-id"
+# .env.exampleをコピーして.envを作成
+cp .env.example .env
+
+# .envファイルを編集して必要な値を設定
+vi .env
 ```
+
+開発環境では、以下の手順で環境変数を設定します：
+
+1. サービスアカウントキーの準備
+
+   - Google Cloud Consoleでサービスアカウントを作成
+   - JSONキーをダウンロード
+   - プロジェクトのルートに保存（.gitignoreに追加）
+
+2. .envファイルの設定
+
+   - SPREADSHEET_ID: スプレッドシートのID
+   - GOOGLE_CLOUD_PROJECT: GCPプロジェクトID
+   - GOOGLE_APPLICATION_CREDENTIALS: サービスアカウントキーのパス
 
 3. ビルド
 
