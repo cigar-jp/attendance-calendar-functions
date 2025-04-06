@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Guest Mode Launcher",
+  "version": "1.0",
+  "description": "指定したURLをゲストモード（インコグニートモード）で開きます。",
+  "permissions": ["windows"],
+  "background": {
+    "service_worker": "index.js"
+  },
+  "action": {
+    "default_title": "ゲストモードで開く"
+  }
+}
