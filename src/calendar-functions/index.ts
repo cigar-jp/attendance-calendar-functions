@@ -23,23 +23,12 @@ interface CloudStorageEvent {
   updated: string;
 }
 
-interface CloudContext {
-  eventId: string;
-  timestamp: string;
-  eventType: string;
-  resource: {
-    service: string;
-    name: string;
-    type: string;
-  };
-}
-
 /**
  * メイン処理のCloud Function
  */
 export const processAttendanceData: HttpFunction = async (
   req: Request,
-  res: Response,
+  res: Response
 ) => {
   // リクエストのバリデーション
   if (!req.body || !req.body.bucket || !req.body.name) {
@@ -75,7 +64,7 @@ export const processAttendanceData: HttpFunction = async (
     const calendarHandler = createCalendarHandler(auth, config.retryConfig);
     const spreadsheetHandler = createSpreadsheetHandler(
       auth,
-      config.spreadsheetId,
+      config.spreadsheetId
     );
 
     // Cloud Storageからファイルを読み込み
@@ -112,15 +101,16 @@ export const processAttendanceData: HttpFunction = async (
       // スプレッドシートを更新
       const updateResult = await spreadsheetHandler.updateSheets(
         data,
-        monthPrefix,
+        monthPrefix
       );
       if (!updateResult.success) {
         throw new Error(`シートの更新に失敗しました: ${updateResult.message}`);
       }
 
       // 差分を抽出
-      const diffResult =
-        await spreadsheetHandler.extractDifferences(monthPrefix);
+      const diffResult = await spreadsheetHandler.extractDifferences(
+        monthPrefix
+      );
       if (!diffResult.success) {
         throw new Error(`差分抽出に失敗しました: ${diffResult.message}`);
       }
@@ -161,7 +151,7 @@ export const processAttendanceData: HttpFunction = async (
  */
 async function processCalendarUpdates(
   calendarHandler: ReturnType<typeof createCalendarHandler>,
-  differences: DiffData[],
+  differences: DiffData[]
 ): Promise<void> {
   // ユーザーごとにデータをグループ化
   const userDiffs = new Map<string, DiffData[]>();
@@ -196,7 +186,7 @@ async function processCalendarUpdates(
           await calendarHandler.processFullDayEvent(
             user.email,
             eventDate,
-            title,
+            title
           );
 
           // 勤務時間外イベントを処理
@@ -233,7 +223,7 @@ async function processCalendarUpdates(
     } catch (error) {
       logger.error(
         `ユーザー ${name} の処理中にエラーが発生しました`,
-        error as Error,
+        error as Error
       );
       throw error;
     }
@@ -245,7 +235,7 @@ async function processCalendarUpdates(
  */
 export const scheduledAttendanceUpdate: HttpFunction = async (
   req: Request,
-  res: Response,
+  res: Response
 ) => {
   try {
     logger.logStart('scheduledAttendanceUpdate', { body: req.body });

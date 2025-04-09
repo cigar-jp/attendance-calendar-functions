@@ -22,7 +22,7 @@ export class SpreadsheetHandler {
    */
   public async updateSheets(
     monthData: CsvRow[],
-    monthPrefix: string,
+    monthPrefix: string
   ): Promise<SpreadsheetOperationResult> {
     try {
       logger.logStart('updateSheets', {
@@ -37,10 +37,10 @@ export class SpreadsheetHandler {
       // 既存のシートを取得
       const existingSheets = await this.listSheets();
       const todaySheet = existingSheets.find(
-        (sheet) => sheet.properties?.title === todaySheetName,
+        (sheet) => sheet.properties?.title === todaySheetName
       );
       const yesterdaySheet = existingSheets.find(
-        (sheet) => sheet.properties?.title === yesterdaySheetName,
+        (sheet) => sheet.properties?.title === yesterdaySheetName
       );
 
       // シートの更新処理
@@ -51,7 +51,7 @@ export class SpreadsheetHandler {
         }
         const newYesterdaySheet = await this.copySheet(
           todaySheet.properties!.sheetId!,
-          yesterdaySheetName,
+          yesterdaySheetName
         );
         logger.info('昨日分のシートを更新しました', {
           sheetId: newYesterdaySheet.properties?.sheetId,
@@ -92,7 +92,7 @@ export class SpreadsheetHandler {
    * 差分を抽出
    */
   public async extractDifferences(
-    monthPrefix: string,
+    monthPrefix: string
   ): Promise<SpreadsheetOperationResult> {
     try {
       logger.logStart('extractDifferences', { monthPrefix });
@@ -104,10 +104,10 @@ export class SpreadsheetHandler {
       // 既存のシートを取得
       const existingSheets = await this.listSheets();
       const todaySheet = existingSheets.find(
-        (sheet) => sheet.properties?.title === todaySheetName,
+        (sheet) => sheet.properties?.title === todaySheetName
       );
       const yesterdaySheet = existingSheets.find(
-        (sheet) => sheet.properties?.title === yesterdaySheetName,
+        (sheet) => sheet.properties?.title === yesterdaySheetName
       );
 
       if (!yesterdaySheet || !todaySheet) {
@@ -121,13 +121,16 @@ export class SpreadsheetHandler {
             hasToday: !!todaySheet,
           },
         };
-        logger.error('シートが見つかりません', error);
+        logger.error(
+          'シートが見つかりません',
+          new Error(`シートが見つかりません: ${JSON.stringify(error)}`)
+        );
         return { success: false, message: error.message, error };
       }
 
       // データを取得
       const yesterdayData = await this.readData(
-        yesterdaySheet.properties!.sheetId!,
+        yesterdaySheet.properties!.sheetId!
       );
       const todayData = await this.readData(todaySheet.properties!.sheetId!);
 
@@ -217,7 +220,7 @@ export class SpreadsheetHandler {
    */
   private async copySheet(
     sourceSheetId: number,
-    destinationTitle: string,
+    destinationTitle: string
   ): Promise<sheets_v4.Schema$Sheet> {
     const response = await this.sheets.spreadsheets.batchUpdate({
       spreadsheetId: this.spreadsheetId,
@@ -293,14 +296,14 @@ export class SpreadsheetHandler {
    */
   private findDifferences(
     yesterdayData: CsvRow[],
-    todayData: CsvRow[],
+    todayData: CsvRow[]
   ): DiffData[] {
     const differences: DiffData[] = [];
 
     // 新規登録と更新を検出
     for (const today of todayData) {
       const yesterday = yesterdayData.find(
-        (y) => y.name === today.name && y.date === today.date,
+        (y) => y.name === today.name && y.date === today.date
       );
 
       if (
@@ -316,7 +319,7 @@ export class SpreadsheetHandler {
     // 削除を検出
     for (const yesterday of yesterdayData) {
       const exists = todayData.some(
-        (t) => t.name === yesterday.name && t.date === yesterday.date,
+        (t) => t.name === yesterday.name && t.date === yesterday.date
       );
 
       if (!exists) {
@@ -331,7 +334,7 @@ export class SpreadsheetHandler {
 // ファクトリ関数をエクスポート
 export function createSpreadsheetHandler(
   auth: any,
-  spreadsheetId: string,
+  spreadsheetId: string
 ): SpreadsheetHandler {
   return new SpreadsheetHandler(auth, spreadsheetId);
 }

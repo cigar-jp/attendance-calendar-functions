@@ -30,7 +30,7 @@ yarn-error.log*
 *.swo
 
 # GCP
-*.json
+service-account.json
 !package.json
 !package-lock.json
 !tsconfig.json

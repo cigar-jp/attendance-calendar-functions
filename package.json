@@ -1,34 +1,42 @@
 {
   "name": "attendance-calendar-functions",
   "version": "1.0.0",
-  "description": "勤怠情報をGoogleカレンダーに同期するCloud Functions",
+  "description": "Attendance data sync with Google Calendar",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "functions-framework --target=processAttendanceData",
-    "deploy": "gcloud functions deploy processAttendanceData --gen2 --runtime=nodejs18 --trigger-http --entry-point=processAttendanceData --region=asia-northeast1",
-    "schedule-deploy": "gcloud functions deploy scheduledAttendanceUpdate --gen2 --runtime=nodejs18 --trigger-pubsub --entry-point=scheduledAttendanceUpdate --region=asia-northeast1",
-    "test": "vitest",
-    "dev": "ts-node src/calendar-functions/debug.ts"
+    "dev": "cross-env NODE_ENV=development ts-node src/calendar-functions/debug.ts",
+    "deploy": "./deploy.sh",
+    "schedule-deploy": "./deploy.sh --schedule",
+    "test": "jest",
+    "lint": "eslint . --ext .ts"
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^3.0.0",
     "@google-cloud/storage": "^7.0.0",
-    "csv-parse": "^5.6.0",
-    "express": "^4.18.2",
-    "googleapis": "^128.0.0",
-    "iconv-lite": "^0.6.3",
-    "jszip": "^3.10.1"
+    "csv-parse": "^5.0.0",
+    "dotenv": "^16.0.0",
+    "googleapis": "^120.0.0",
+    "iconv-lite": "^0.6.0",
+    "jszip": "^3.10.0",
+    "tslib": "^2.5.0"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/node": "^18.0.0",
+    "@types/express": "^4.17.17",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^18.15.11",
+    "@typescript-eslint/eslint-plugin": "^5.57.1",
+    "@typescript-eslint/parser": "^5.57.1",
+    "cross-env": "^7.0.3",
+    "eslint": "^8.37.0",
+    "jest": "^29.5.0",
+    "prettier": "^2.8.7",
+    "ts-jest": "^29.1.0",
     "ts-node": "^10.9.1",
-    "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "typescript": "^5.0.3"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "private": true
+  }
 }

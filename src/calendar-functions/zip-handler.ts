@@ -19,12 +19,14 @@ export class ZipHandler {
       logger.logStart('processZipFile');
 
       // ZIPファイルを解凍
-      const zip = new JSZip();
-      const zipContent = await zip.loadAsync(zipBuffer);
+      const zip = await JSZip.loadAsync(zipBuffer);
 
       // CSVファイルを検索
-      const csvFile = this.findCsvFile(zipContent);
-      if (!csvFile) {
+      const csvFiles = Object.entries(zip.files).filter(([name]) =>
+        name.endsWith('.csv')
+      );
+
+      if (csvFiles.length === 0) {
         logger.warn('CSVファイルが見つかりません');
         return {
           success: false,
@@ -37,7 +39,8 @@ export class ZipHandler {
       }
 
       // CSVファイルの内容を取得
-      const csvBuffer = await csvFile.async('nodebuffer');
+      const [, file] = csvFiles[0];
+      const csvBuffer = await file.async('nodebuffer');
 
       // ShiftJISからUTF-8に変換
       const csvString = iconv.decode(csvBuffer, CSV_CONSTANTS.ENCODING);
@@ -59,18 +62,6 @@ export class ZipHandler {
   }
 
   /**
-   * CSVファイルを検索
-   */
-  private findCsvFile(zip: JSZip): JSZip.JSZipObject | null {
-    for (const [fileName, file] of Object.entries(zip.files)) {
-      if (fileName.startsWith(CSV_CONSTANTS.FILE_NAME_PREFIX)) {
-        return file;
-      }
-    }
-    return null;
-  }
-
-  /**
    * CSVデータをパース
    */
   public parseCsvContent(csvContent: string): CsvRow[] {
@@ -89,11 +80,11 @@ export class ZipHandler {
         employeeId: String(record[CSV_CONSTANTS.FIELDS.EMPLOYEE_ID]),
         date: String(record[CSV_CONSTANTS.FIELDS.DATE]),
         attendanceGroupId: String(
-          record[CSV_CONSTANTS.FIELDS.ATTENDANCE_GROUP_ID],
+          record[CSV_CONSTANTS.FIELDS.ATTENDANCE_GROUP_ID]
         ),
         groupName: String(record[CSV_CONSTANTS.FIELDS.GROUP_NAME]),
         scheduleTemplateId: String(
-          record[CSV_CONSTANTS.FIELDS.SCHEDULE_TEMPLATE_ID],
+          record[CSV_CONSTANTS.FIELDS.SCHEDULE_TEMPLATE_ID]
         ),
         startTime: String(record[CSV_CONSTANTS.FIELDS.START_TIME]),
         endTime: String(record[CSV_CONSTANTS.FIELDS.END_TIME]),

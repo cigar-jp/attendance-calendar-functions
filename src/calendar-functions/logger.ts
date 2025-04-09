@@ -1,55 +1,41 @@
-import { ErrorLog } from './types';
+import { ExecutionError } from './types';
 
 /**
- * ログレベルの定義
+ * ログレベル
  */
-export enum LogLevel {
-  DEBUG = 'DEBUG',
-  INFO = 'INFO',
-  WARN = 'WARN',
-  ERROR = 'ERROR',
-}
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
 /**
- * ログメッセージの構造
+ * ログメッセージのインターフェース
  */
 interface LogMessage {
+  severity: LogLevel;
   timestamp: string;
   level: LogLevel;
   message: string;
-  data?: unknown;
+  data?: any;
 }
 
 /**
  * ロガークラス
  */
 export class Logger {
-  private static instance: Logger;
   private context: string;
 
-  private constructor(context: string) {
+  constructor(context: string) {
     this.context = context;
   }
 
   /**
-   * ロガーインスタンスを取得
+   * ログメッセージを作成
    */
-  public static getInstance(context: string): Logger {
-    if (!Logger.instance) {
-      Logger.instance = new Logger(context);
-    }
-    return Logger.instance;
-  }
-
-  /**
-   * ログメッセージを構築
-   */
-  private formatMessage(
+  private createLogMessage(
     level: LogLevel,
     message: string,
-    data?: unknown,
+    data?: any
   ): LogMessage {
     return {
+      severity: level,
       timestamp: new Date().toISOString(),
       level,
       message: `[${this.context}] ${message}`,
@@ -58,91 +44,78 @@ export class Logger {
   }
 
   /**
-   * ログ出力の共通処理
+   * ログを出力
    */
-  private log(logMessage: LogMessage): void {
-    // Cloud Loggingのseverityレベルに合わせてコンソール出力
-    const logData = {
-      severity: logMessage.level,
-      ...logMessage,
-    };
-
-    console.log(JSON.stringify(logData));
+  private log(level: LogLevel, message: string, data?: any): void {
+    const logMessage = this.createLogMessage(level, message, data);
+    console.log(JSON.stringify(logMessage));
   }
 
   /**
    * デバッグログ
    */
-  public debug(message: string, data?: unknown): void {
-    this.log(this.formatMessage(LogLevel.DEBUG, message, data));
+  debug(message: string, data?: any): void {
+    this.log('DEBUG', message, data);
   }
 
   /**
    * 情報ログ
    */
-  public info(message: string, data?: unknown): void {
-    this.log(this.formatMessage(LogLevel.INFO, message, data));
+  info(message: string, data?: any): void {
+    this.log('INFO', message, data);
   }
 
   /**
    * 警告ログ
    */
-  public warn(message: string, data?: unknown): void {
-    this.log(this.formatMessage(LogLevel.WARN, message, data));
+  warn(message: string, data?: any): void {
+    this.log('WARN', message, data);
   }
 
   /**
    * エラーログ
    */
-  public error(
-    message: string,
-    error?: Error | ErrorLog,
-    data?: unknown,
-  ): void {
-    const errorLog: ErrorLog = {
+  error(message: string, error: Error): void {
+    const errorData: ExecutionError = {
       timestamp: new Date().toISOString(),
-      errorCode:
-        error instanceof Error
-          ? error.name
-          : error?.errorCode || 'UNKNOWN_ERROR',
-      message:
-        error instanceof Error ? error.message : error?.message || message,
-      stackTrace: error instanceof Error ? error.stack : undefined,
-      requestData: data,
+      errorCode: error.name,
+      message: error.message,
+      stackTrace: error.stack,
     };
-
-    this.log(this.formatMessage(LogLevel.ERROR, message, errorLog));
+    this.log('ERROR', message, errorData);
   }
 
   /**
-   * 実行開始ログ
+   * 処理開始ログ
    */
-  public logStart(functionName: string, params?: unknown): void {
-    this.info(`Starting ${functionName}`, params);
+  logStart(functionName: string, data?: any): void {
+    this.info(`Starting ${functionName}`, data);
   }
 
   /**
-   * 実行完了ログ
+   * 処理完了ログ
    */
-  public logComplete(functionName: string, result?: unknown): void {
-    this.info(`Completed ${functionName}`, result);
+  logComplete(functionName: string, data?: any): void {
+    this.info(`Completed ${functionName}`, data);
   }
 
   /**
-   * 実行失敗ログ
+   * 処理失敗ログ
    */
-  public logFailure(
-    functionName: string,
-    error: Error | ErrorLog,
-    data?: unknown,
-  ): void {
-    this.error(`Failed ${functionName}`, error, data);
+  logFailure(functionName: string, error: Error, data?: any): void {
+    this.error(`Failed ${functionName}`, error);
+    if (data) {
+      this.error(
+        `Additional data for ${functionName}`,
+        new Error(JSON.stringify(data))
+      );
+    }
   }
 }
 
 /**
- * ログヘルパー関数
+ * ロガーインスタンスを作成
  */
 export function createLogger(context: string): Logger {
-  return Logger.getInstance(context);
+  return new Logger(context);
 }

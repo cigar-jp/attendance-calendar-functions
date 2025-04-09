@@ -1,23 +1,12 @@
 /**
- * エラーログのインターフェース
+ * 環境設定のインターフェース
  */
-export interface ErrorLog {
-  timestamp: string;
-  errorCode: string;
-  message: string;
-  stackTrace?: string;
-  requestData?: unknown;
-}
-
-/**
- * 実行レポートのインターフェース
- */
-export interface ExecutionReport {
-  startTime: string;
-  endTime: string;
-  processedFiles: number;
-  processedEvents: number;
-  errors: ErrorLog[];
+export interface EnvironmentConfig {
+  spreadsheetId: string;
+  calendarScopes: string[];
+  spreadsheetScopes: string[];
+  batchSize: number;
+  retryConfig: RetryConfig;
 }
 
 /**
@@ -31,15 +20,7 @@ export interface RetryConfig {
 }
 
 /**
- * ユーザー情報のインターフェース
- */
-export interface User {
-  name: string;
-  email: string;
-}
-
-/**
- * CSV行データのインターフェース
+ * CSVの行データ
  */
 export interface CsvRow {
   name: string;
@@ -53,7 +34,7 @@ export interface CsvRow {
 }
 
 /**
- * 差分データのインターフェース
+ * カレンダー更新用の差分データ
  */
 export interface DiffData extends CsvRow {
   isDeleted?: boolean;
@@ -70,40 +51,82 @@ export interface CalendarEvent {
 }
 
 /**
- * スプレッドシートの操作結果インターフェース
+ * ユーザー情報
  */
-export interface SpreadsheetOperationResult {
-  success: boolean;
-  message: string;
-  data?: unknown;
-  error?: ErrorLog;
+export interface User {
+  name: string;
+  email: string;
 }
 
 /**
- * ZIPファイル処理結果のインターフェース
+ * 実行レポート
+ */
+export interface ExecutionReport {
+  startTime: string;
+  endTime: string;
+  processedFiles: number;
+  processedEvents: number;
+  errors: ExecutionError[];
+}
+
+/**
+ * エラー情報
+ */
+export interface ExecutionError {
+  timestamp: string;
+  errorCode: string;
+  message: string;
+  stackTrace?: string;
+}
+
+/**
+ * ZIP処理の結果
  */
 export interface ZipProcessResult {
   success: boolean;
   csvContent?: string;
-  error?: ErrorLog;
+  error?: ExecutionError;
 }
 
 /**
- * 環境設定のインターフェース
+ * スプレッドシート処理の結果
  */
-export interface EnvironmentConfig {
-  spreadsheetId: string;
-  calendarScopes: string[];
-  spreadsheetScopes: string[];
-  batchSize: number;
-  retryConfig: RetryConfig;
+export interface SpreadsheetResult {
+  success: boolean;
+  message?: string;
+  data?: any;
 }
 
 /**
- * イベント処理オプションのインターフェース
+ * スプレッドシートの操作結果
+ */
+/**
+ * スプレッドシートの操作エラー
+ */
+export interface SpreadsheetOperationError {
+  timestamp: string;
+  errorCode: string;
+  message: string;
+  details?: any;
+  stackTrace?: string;
+}
+
+/**
+ * スプレッドシートの操作結果
+ */
+export interface SpreadsheetOperationResult {
+  success: boolean;
+  message?: string;
+  error?: SpreadsheetOperationError;
+  data?: any;
+}
+
+/**
+ * イベント処理オプション
  */
 export interface EventProcessingOptions {
   dryRun?: boolean;
-  forceUpdate?: boolean;
+  retries?: number;
+  interval?: number;
   skipDeleted?: boolean;
 }
