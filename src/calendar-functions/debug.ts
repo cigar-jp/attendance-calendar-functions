@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import { google } from 'googleapis';
+import { JWT } from 'google-auth-library';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 
@@ -41,10 +42,18 @@ async function main() {
     // 設定読み込み
     const config = getConfig();
 
-    // 認証
-    const auth = await google.auth.getClient({
+    // サービスアカウントの認証情報を読み込み
+    const keyFile = require(path.resolve(
+      process.cwd(),
+      process.env.GOOGLE_APPLICATION_CREDENTIALS as string
+    ));
+
+    // JWTクライアントを作成
+    const auth = new JWT({
+      email: keyFile.client_email,
+      key: keyFile.private_key,
       scopes: [...config.calendarScopes, ...config.spreadsheetScopes],
-      keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      subject: 'izm.master@izumogroup.co.jp', // 内部ユーザーを代理
     });
 
     // ハンドラー初期化

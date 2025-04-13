@@ -248,6 +248,20 @@ export class SpreadsheetHandler {
    * データを書き込み
    */
   private async writeData(sheetId: number, data: CsvRow[]): Promise<void> {
+    // シート情報を取得
+    const response = await this.sheets.spreadsheets.get({
+      spreadsheetId: this.spreadsheetId,
+      fields: 'sheets.properties',
+    });
+
+    const sheet = response.data.sheets?.find(
+      (s) => s.properties?.sheetId === sheetId
+    );
+
+    if (!sheet?.properties?.title) {
+      throw new Error(`シートが見つかりません: ${sheetId}`);
+    }
+
     const values = data.map((row) => [
       row.name,
       row.employeeId,
@@ -261,7 +275,7 @@ export class SpreadsheetHandler {
 
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: this.spreadsheetId,
-      range: `'${sheetId}'!A1:H${values.length}`,
+      range: `'${sheet.properties.title}'!A1:H${values.length}`,
       valueInputOption: 'RAW',
       requestBody: {
         values,
@@ -273,9 +287,23 @@ export class SpreadsheetHandler {
    * データを読み込み
    */
   private async readData(sheetId: number): Promise<CsvRow[]> {
+    // シート情報を取得
+    const sheetResponse = await this.sheets.spreadsheets.get({
+      spreadsheetId: this.spreadsheetId,
+      fields: 'sheets.properties',
+    });
+
+    const sheet = sheetResponse.data.sheets?.find(
+      (s) => s.properties?.sheetId === sheetId
+    );
+
+    if (!sheet?.properties?.title) {
+      throw new Error(`シートが見つかりません: ${sheetId}`);
+    }
+
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.spreadsheetId,
-      range: `'${sheetId}'!A:H`,
+      range: `'${sheet.properties.title}'!A:H`,
     });
 
     const values = response.data.values || [];
