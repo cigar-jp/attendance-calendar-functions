@@ -3,15 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <title>Guest Mode Launcher</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
       body {
-        width: 240px;
-        padding: 10px;
-        font-family: Arial, sans-serif;
+        background-color: #fff;
+        width: 300px;
+        margin: 0;
+        padding: 8px 16px 16px;
+        font-family: 'Noto Sans JP', sans-serif;
       }
       h1 {
         font-size: 16px;
-        margin-bottom: 10px;
+        font-weight: 500;
+        text-align: center;
+        color: #333;
+        margin-bottom: 16px;
       }
       .links {
         display: flex;
@@ -20,21 +29,22 @@
       }
       .links button {
         width: 100%;
-        padding: 8px;
-        background-color: #4caf50;
-        color: white;
+        padding: 12px;
+        font-size: 14px;
+        background-color: #8e7cc3;
+        color: #fff;
         border: none;
         border-radius: 4px;
         cursor: pointer;
         text-align: left;
       }
       .links button:hover {
-        background-color: #45a049;
+        background-color: #5a3674;
       }
     </style>
   </head>
   <body>
-    <h1>リンクを選択</h1>
+    <h1>リンクを選択してゲストモードで開く</h1>
     <div class="links">
       <button
         data-url="https://meetings.hubspot.com/treatment/coupletreatmentmedel?uuid=47be5bff-5f1d-4aed-b026-fd27eafb185b"
