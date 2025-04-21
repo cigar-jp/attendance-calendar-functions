@@ -1,4 +1,7 @@
-document.getElementById('openLink').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'openInIncognito' });
-  window.close();
+document.querySelectorAll('.links button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const url = btn.getAttribute('data-url');
+    chrome.runtime.sendMessage({ action: 'openInIncognito', url });
+    window.close();
+  });
 });

@@ -1,28 +1,71 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
   <head>
+    <meta charset="UTF-8" />
     <title>Guest Mode Launcher</title>
     <style>
       body {
-        width: 200px;
+        width: 240px;
         padding: 10px;
+        font-family: Arial, sans-serif;
       }
-      button {
+      h1 {
+        font-size: 16px;
+        margin-bottom: 10px;
+      }
+      .links {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .links button {
         width: 100%;
-        padding: 10px;
+        padding: 8px;
         background-color: #4caf50;
         color: white;
         border: none;
         border-radius: 4px;
         cursor: pointer;
+        text-align: left;
       }
-      button:hover {
+      .links button:hover {
         background-color: #45a049;
       }
     </style>
   </head>
   <body>
-    <button id="openLink">ゲストモードで開く</button>
+    <h1>リンクを選択</h1>
+    <div class="links">
+      <button
+        data-url="https://meetings.hubspot.com/treatment/coupletreatmentmedel?uuid=47be5bff-5f1d-4aed-b026-fd27eafb185b"
+      >
+        カップルトリートメント予約
+      </button>
+      <button data-url="https://share.hsforms.com/1SFBQ-ZMFQpGV37QCoBSMSAegwwl">
+        フェア参加後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/1XXaUqzZMSQKqoQZa7WDYngegwwl">
+        成約後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/1PrEAllorTOqvhFFAR0Q7uQegwwl">
+        初回打ち合わせ後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/1WjqmyPYlQOuzcj2sgc4naAegwwl">
+        2回目打ち合わせ後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/1Kb_pQYhgR7WIvCpE2K8sMAegwwl">
+        3回目打ち合わせ後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/1ewo3TZ2TSXOyZQB4OlVWRgegwwl">
+        4回目打ち合わせ後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/17rqYNoLmS7yNnrGZOuNaEAegwwl">
+        最終打ち合わせ後アンケート
+      </button>
+      <button data-url="https://share.hsforms.com/1z8B2XzTqS7ODxxo-sv2sDAegwwl">
+        挙式後アンケート
+      </button>
+    </div>
     <script src="popup.js"></script>
   </body>
 </html>
