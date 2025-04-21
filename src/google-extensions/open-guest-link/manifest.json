@@ -8,6 +8,7 @@
     "service_worker": "index.js"
   },
   "action": {
-    "default_title": "ゲストモードで開く"
+    "default_title": "ゲストモードで開く",
+    "default_popup": "popup.html"
   }
 }
