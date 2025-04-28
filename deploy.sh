@@ -22,7 +22,7 @@ gcloud functions deploy processAttendanceData \
 gcloud functions deploy scheduledAttendanceUpdate \
   --gen2 \
   --runtime=nodejs18 \
-  --trigger-pubsub \
+  --trigger-bucket \
   --entry-point=scheduledAttendanceUpdate \
   --region=asia-northeast1 \
   --set-env-vars SPREADSHEET_ID=$SPREADSHEET_ID \
