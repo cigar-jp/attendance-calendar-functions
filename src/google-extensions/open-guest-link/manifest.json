@@ -1,6 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Guest Mode Launcher",
+  "icons": {
+    "16": "link_icon.png",
+    "48": "link_icon.png",
+    "128": "link_icon.png"
+  },
+  "name": "ゲストモードリンク",
   "version": "1.0",
   "description": "指定したURLをゲストモード（インコグニートモード）で開きます。",
   "permissions": ["windows"],
@@ -9,6 +14,11 @@
   },
   "action": {
     "default_title": "ゲストモードで開く",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "link_icon.png",
+      "48": "link_icon.png",
+      "128": "link_icon.png"
+    }
   }
 }
