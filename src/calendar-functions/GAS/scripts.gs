@@ -238,9 +238,6 @@ function addEventsFromSpreadsheet(user, diffData) {
     return;
   }
 
-  // 基準日（必要に応じて調整）
-  const thresholdDate = new Date('2025-03-14');
-
   // フィルタ済みデータを処理
   filteredData.forEach((row, index) => {
     const rowNum = index + 1;
@@ -260,18 +257,18 @@ function addEventsFromSpreadsheet(user, diffData) {
     );
 
     // 終日イベントの処理
-    processFullDayEvent(calendar, eventDate, title, rowNum);
+    // processFullDayEvent(calendar, eventDate, title, rowNum);
 
     // 勤務時間がある場合の業務時間外イベント処理
-    if (scheduleTemplateId !== '0') {
-      processWorkingHoursEvents(
-        calendar,
-        eventDate,
-        startTimeStr,
-        endTimeStr,
-        rowNum
-      );
-    }
+    // if (scheduleTemplateId !== '0') {
+    //   processWorkingHoursEvents(
+    //     calendar,
+    //     eventDate,
+    //     startTimeStr,
+    //     endTimeStr,
+    //     rowNum
+    //   );
+    // }
   });
 }
 

@@ -36,6 +36,5 @@ service-account.json
 !tsconfig.json
 
 # Project specific
-*.gs
 *.zip
 service-account-key.json
