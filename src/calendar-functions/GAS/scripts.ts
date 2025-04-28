@@ -538,11 +538,23 @@ function processSheets() {
   const today = new Date();
   const prefix = `${today.getMonth() + 1}月_`;
   let diffData;
-  try {
-    diffData = extractDifferences(prefix);
-  } catch (e) {
-    Logger.log('差分抽出でエラー: ' + e.toString());
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
+  const todaySheet = ss.getSheetByName(prefix + '今日分');
+  if (!todaySheet) {
+    Logger.log('シートが見つかりません: ' + prefix + '今日分');
     return;
+  }
+  if (!yesterdaySheet) {
+    const values = todaySheet.getDataRange().getValues();
+    diffData = values.slice(1);
+  } else {
+    try {
+      diffData = extractDifferences(prefix);
+    } catch (e) {
+      Logger.log('差分抽出でエラー: ' + e.toString());
+      return;
+    }
   }
   if (diffData && diffData.length > 0) {
     // 差分データを新規シートに書き込み
