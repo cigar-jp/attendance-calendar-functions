@@ -1,92 +1,17 @@
-// @ts-nocheck
-
 /**
- * CSVデータから対象月を抽出する
+ * スプレッドシート取得ヘルパー
  */
-function getDataMonths(csvData) {
-  const rows = Utilities.parseCsv(csvData);
-  if (rows.length < 2) return null;
-
-  // ヘッダーを除いた全データの日付を取得
-  const dates = rows.slice(1).map((row) => new Date(row[2]));
-
-  // ユニークな月を抽出（例：[4, 5]）
-  const months = [...new Set(dates.map((date) => date.getMonth() + 1))];
-  return months.sort((a, b) => a - b);
-}
-
-/**
- * 月に基づいてデータをフィルタリング
- */
-function filterDataByMonth(data, targetMonth) {
-  return data.filter((row) => {
-    if (row.length < 3) return false;
-    const date = new Date(row[2]);
-    return date.getMonth() + 1 === targetMonth;
-  });
-}
-
-/**
- * 月に基づいてシート名のプレフィックスを決定
- */
-function getMonthPrefix(month) {
-  return `${month}月_`;
-}
-
-/**
- * CSVデータを整形する
- */
-function formatCsvData(csvString) {
-  const rows = Utilities.parseCsv(csvString);
-
-  // ヘッダー行を取得し、I列以降を除外
-  const headers = rows[0].slice(0, 8);
-
-  // データ行を処理
-  return rows.slice(1).map((row) => {
-    const formattedRow = row.slice(0, 8); // I列以降を除外
-    return formattedRow;
-  });
-}
-
-/**
- * シートの更新処理
- */
-function updateSheets(monthData, monthPrefix) {
-  const ss = SpreadsheetApp.openById(
+function getSpreadsheet() {
+  return SpreadsheetApp.openById(
     PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')
   );
-
-  // 既存のシートを更新
-  const yesterdaySheet = ss.getSheetByName(monthPrefix + '昨日分');
-  const todaySheet = ss.getSheetByName(monthPrefix + '今日分');
-
-  if (todaySheet) {
-    if (yesterdaySheet) {
-      yesterdaySheet.clear();
-    }
-    // 今日分を昨日分にコピー
-    const newYesterdaySheet = todaySheet.copyTo(ss);
-    newYesterdaySheet.setName(monthPrefix + '昨日分');
-
-    // 既存の今日分を削除
-    ss.deleteSheet(todaySheet);
-  }
-
-  // 新しいデータを今日分として保存
-  const newTodaySheet = ss.insertSheet(monthPrefix + '今日分');
-  newTodaySheet
-    .getRange(1, 1, monthData.length, monthData[0].length)
-    .setValues(monthData);
 }
 
 /**
  * 差分を抽出する
  */
 function extractDifferences(monthPrefix) {
-  const ss = SpreadsheetApp.openById(
-    PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')
-  );
+  const ss = getSpreadsheet();
 
   const yesterdaySheet = ss.getSheetByName(monthPrefix + '昨日分');
   const todaySheet = ss.getSheetByName(monthPrefix + '今日分');
@@ -107,38 +32,38 @@ function extractDifferences(monthPrefix) {
   // 差分を格納する配列
   const differences = [];
 
-  // 今日のデータを処理
+  // データをMap化して検索を高速化
+  const yesterdayMap = new Map();
+  for (let i = 1; i < yesterdayData.length; i++) {
+    const row = yesterdayData[i];
+    const [name, , date] = row;
+    yesterdayMap.set(`${name}_${date}`, row);
+  }
+
+  const todayMap = new Map();
   for (let i = 1; i < todayData.length; i++) {
-    const todayRow = todayData[i];
-    const key = `${todayRow[0]}_${todayRow[2]}`; // 名前と日付の組み合わせ
+    const row = todayData[i];
+    const [name, , date] = row;
+    todayMap.set(`${name}_${date}`, row);
+  }
+  Logger.log(yesterdayMap.length);
+  Logger.log(todayMap.length);
 
-    // 昨日のデータから対応する行を探す
-    const yesterdayRow = yesterdayData.find(
-      (row, index) => index > 0 && `${row[0]}_${row[2]}` === key
-    );
-
-    // 新規登録または変更があった場合
+  // 今日のデータを処理
+  for (const [key, todayRow] of todayMap.entries()) {
     if (
-      !yesterdayRow ||
-      yesterdayRow[5] !== todayRow[5] || // スケジュールテンプレートID
-      yesterdayRow[6] !== todayRow[6] || // 出勤予定時刻
-      yesterdayRow[7] !== todayRow[7] // 退勤予定時刻
+      !yesterdayMap.has(key) ||
+      yesterdayMap.get(key)[5] !== todayRow[5] ||
+      yesterdayMap.get(key)[6] !== todayRow[6] ||
+      yesterdayMap.get(key)[7] !== todayRow[7]
     ) {
       differences.push(todayRow);
     }
   }
 
   // 昨日あって今日ない予定を検出（削除された予定）
-  for (let i = 1; i < yesterdayData.length; i++) {
-    const yesterdayRow = yesterdayData[i];
-    const key = `${yesterdayRow[0]}_${yesterdayRow[2]}`; // 名前と日付の組み合わせ
-
-    // 今日のデータに存在しない場合
-    const exists = todayData.some(
-      (row, index) => index > 0 && `${row[0]}_${row[2]}` === key
-    );
-
-    if (!exists) {
+  for (const [key, yesterdayRow] of yesterdayMap.entries()) {
+    if (!todayMap.has(key)) {
       // 削除マーカーを付与して差分に追加
       yesterdayRow.push('DELETE');
       differences.push(yesterdayRow);
@@ -147,15 +72,16 @@ function extractDifferences(monthPrefix) {
 
   // 差分があれば新しいシートとして保存
   if (differences.length > 0) {
-    const month = parseInt(monthPrefix.match(/(\d+)月/)[1]);
-    const sheetName = `Sheet1_${month}月`;
-    const diffSheet = ss.getSheetByName(sheetName);
-    if (diffSheet) {
-      ss.deleteSheet(diffSheet);
-    }
+    // ヘッダーを含めてシートに保存（ヘッダー行は昨日シートの1行目を再利用）
+    const headers = yesterdayData[0];
+    const month = parseInt(monthPrefix.match(/(\d+)月/)[1], 10);
+    const sheetName = `Diff_${month}月`;
+    const existing = ss.getSheetByName(sheetName);
+    if (existing) ss.deleteSheet(existing);
     const newDiffSheet = ss.insertSheet(sheetName);
+    newDiffSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     newDiffSheet
-      .getRange(1, 1, differences.length, differences[0].length)
+      .getRange(2, 1, differences.length, differences[0].length)
       .setValues(differences);
   }
 
@@ -530,12 +456,10 @@ function convertTimeStringToDecimal(timeStr) {
  * トリガーの設定を行う関数
  */
 function processSheets() {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const spreadsheetId = scriptProperties.getProperty('SPREADSHEET_ID');
+  const ss = getSpreadsheet();
   const today = new Date();
   const prefix = `${today.getMonth() + 1}月_`;
   let diffData;
-  const ss = SpreadsheetApp.openById(spreadsheetId);
   const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
   const todaySheet = ss.getSheetByName(prefix + '今日分');
   if (!todaySheet) {
@@ -555,7 +479,6 @@ function processSheets() {
   }
   if (diffData && diffData.length > 0) {
     // 差分データを新規シートに書き込み
-    const ss = SpreadsheetApp.openById(spreadsheetId);
     const diffSheetName = prefix + '差分';
     const existingSheet = ss.getSheetByName(diffSheetName);
     if (existingSheet) ss.deleteSheet(existingSheet);
@@ -570,6 +493,10 @@ function processSheets() {
 }
 
 function setupTrigger() {
+  // タイムゾーンをログ出力
+  const tz = Session.getScriptTimeZone();
+  Logger.log('設定するタイムゾーン: ' + tz);
+
   // 既存のトリガーを全て削除
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach((trigger) => {
@@ -583,6 +510,7 @@ function setupTrigger() {
     .timeBased()
     .everyDays(1)
     .atHour(6)
+    .inTimezone(tz)
     .create();
 
   // エラー通知の設定
@@ -591,4 +519,44 @@ function setupTrigger() {
     'NOTIFICATION_EMAIL',
     'izm.master@izumogroup.co.jp'
   );
+}
+
+/**
+ * テスト用：純粋な差分抽出ロジック
+ */
+function extractDifferencesFromArrays(yesterdayData, todayData) {
+  const differences = [];
+  const ym = new Map();
+  for (let i = 1; i < yesterdayData.length; i++) {
+    const row = yesterdayData[i];
+    const [name, , date] = row;
+    ym.set(`${name}_${date}`, row.slice());
+  }
+  const tm = new Map();
+  for (let i = 1; i < todayData.length; i++) {
+    const row = todayData[i];
+    const [name, , date] = row;
+    tm.set(`${name}_${date}`, row.slice());
+  }
+  // 追加・変更検出
+  for (const [key, row] of tm.entries()) {
+    const yRow = ym.get(key);
+    if (
+      !yRow ||
+      yRow[5] !== row[5] ||
+      yRow[6] !== row[6] ||
+      yRow[7] !== row[7]
+    ) {
+      differences.push(row.slice());
+    }
+  }
+  // 削除検出
+  for (const [key, row] of ym.entries()) {
+    if (!tm.has(key)) {
+      const delRow = row.slice();
+      delRow.push('DELETE');
+      differences.push(delRow);
+    }
+  }
+  return differences;
 }
