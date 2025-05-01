@@ -31,32 +31,67 @@ function extractDifferences(monthPrefix) {
 
   // 差分を格納する配列
   const differences = [];
+  let loggedFirst = false;
 
   // データをMap化して検索を高速化
   const yesterdayMap = new Map();
   for (let i = 1; i < yesterdayData.length; i++) {
     const row = yesterdayData[i];
     const [name, , date] = row;
-    yesterdayMap.set(`${name}_${date}`, row);
+    const nameKey = String(name).trim();
+    const dateKey = date instanceof Date ? date.getTime() : date;
+    yesterdayMap.set(`${nameKey}_${dateKey}`, row);
   }
 
   const todayMap = new Map();
   for (let i = 1; i < todayData.length; i++) {
     const row = todayData[i];
     const [name, , date] = row;
-    todayMap.set(`${name}_${date}`, row);
+    const nameKey = String(name).trim();
+    const dateKey = date instanceof Date ? date.getTime() : date;
+    todayMap.set(`${nameKey}_${dateKey}`, row);
   }
-  Logger.log(yesterdayMap.length);
-  Logger.log(todayMap.length);
+  Logger.log(monthPrefix);
+  Logger.log(yesterdayMap.size);
+  Logger.log(todayMap.size);
 
   // 今日のデータを処理
   for (const [key, todayRow] of todayMap.entries()) {
+    const yRow = yesterdayMap.get(key);
+    const yTemplate = yRow ? String(yRow[5]).trim() : null;
+    const yStart = yRow
+      ? yRow[6] instanceof Date
+        ? yRow[6].getTime()
+        : yRow[6]
+      : null;
+    const yEnd = yRow
+      ? yRow[7] instanceof Date
+        ? yRow[7].getTime()
+        : yRow[7]
+      : null;
+    const tTemplate = String(todayRow[5]).trim();
+    const tStart =
+      todayRow[6] instanceof Date ? todayRow[6].getTime() : todayRow[6];
+    const tEnd =
+      todayRow[7] instanceof Date ? todayRow[7].getTime() : todayRow[7];
++    // 完全一致する場合は差分に含めない
++    if (yRow && JSON.stringify(yRow) === JSON.stringify(todayRow)) {
++      continue;
++    }
     if (
-      !yesterdayMap.has(key) ||
-      yesterdayMap.get(key)[5] !== todayRow[5] ||
-      yesterdayMap.get(key)[6] !== todayRow[6] ||
-      yesterdayMap.get(key)[7] !== todayRow[7]
+      !yRow ||
+      yTemplate !== tTemplate ||
+      yStart !== tStart ||
+      yEnd !== tEnd
     ) {
+      if (!loggedFirst) {
+        Logger.log('first diff key: ' + key);
+        Logger.log(
+          'first diff yesterday: ' + JSON.stringify(yesterdayMap.get(key))
+        );
+        Logger.log('first diff today: ' + JSON.stringify(todayRow));
+        loggedFirst = true;
+      }
       differences.push(todayRow);
     }
   }
@@ -69,6 +104,8 @@ function extractDifferences(monthPrefix) {
       differences.push(yesterdayRow);
     }
   }
+
+  Logger.log('differences: ' + differences.length);
 
   // 差分があれば新しいシートとして保存
   if (differences.length > 0) {
