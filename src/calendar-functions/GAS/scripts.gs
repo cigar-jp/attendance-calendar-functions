@@ -74,10 +74,10 @@ function extractDifferences(monthPrefix) {
       todayRow[6] instanceof Date ? todayRow[6].getTime() : todayRow[6];
     const tEnd =
       todayRow[7] instanceof Date ? todayRow[7].getTime() : todayRow[7];
-+    // 完全一致する場合は差分に含めない
-+    if (yRow && JSON.stringify(yRow) === JSON.stringify(todayRow)) {
-+      continue;
-+    }
+    // 完全一致する場合は差分に含めない
+    if (yRow && JSON.stringify(yRow) === JSON.stringify(todayRow)) {
+      continue;
+    }
     if (
       !yRow ||
       yTemplate !== tTemplate ||
@@ -220,18 +220,46 @@ function addEventsFromSpreadsheet(user, diffData) {
     );
 
     // 終日イベントの処理
-    // processFullDayEvent(calendar, eventDate, title, rowNum);
+    processFullDayEvent(calendar, eventDate, title, rowNum);
 
-    // 勤務時間がある場合の業務時間外イベント処理
-    // if (scheduleTemplateId !== '0') {
-    //   processWorkingHoursEvents(
-    //     calendar,
-    //     eventDate,
-    //     startTimeStr,
-    //     endTimeStr,
-    //     rowNum
-    //   );
-    // }
+    // 勤務時間外イベント処理
+    if (scheduleTemplateId === '0') {
+      // 公休日の場合、9:00-21:00まで業務時間外イベント作成
+      const holidayStart = new Date(eventDate);
+      holidayStart.setHours(9, 0, 0, 0);
+      const holidayEnd = new Date(eventDate);
+      holidayEnd.setHours(21, 0, 0, 0);
+      const events = calendar.getEvents(holidayStart, holidayEnd, {
+        search: '業務時間外',
+      });
+      if (events.length === 0) {
+        calendar.createEvent('業務時間外', holidayStart, holidayEnd, {
+          reminders: { useDefault: false, overrides: [] },
+        });
+        Logger.log(`行 ${rowNum}：公休の業務時間外イベント作成（9:00～21:00）`);
+      } else {
+        events.forEach((event) => {
+          if (
+            event.getTitle() === '業務時間外' &&
+            (event.getStartTime().getTime() !== holidayStart.getTime() ||
+              event.getEndTime().getTime() !== holidayEnd.getTime())
+          ) {
+            event.setTime(holidayStart, holidayEnd);
+            Logger.log(
+              `行 ${rowNum}：公休の業務時間外イベント更新（9:00～21:00）`
+            );
+          }
+        });
+      }
+    } else {
+      processWorkingHoursEvents(
+        calendar,
+        eventDate,
+        startTimeStr,
+        endTimeStr,
+        rowNum
+      );
+    }
   });
 }
 
