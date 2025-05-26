@@ -219,6 +219,43 @@ function addEventsFromSpreadsheet(user, diffData) {
       endTimeStr
     );
 
+    // 年次有給優先処理
+    const leaveType = String(row[8]).trim();
+    if (leaveType === '年次有給') {
+      // 終日「年次有給」イベント
+      processFullDayEvent(calendar, eventDate, '年次有給', rowNum);
+      // 9:00～21:00の業務時間外イベント
+      const leaveStart = new Date(eventDate);
+      leaveStart.setHours(9, 0, 0, 0);
+      const leaveEnd = new Date(eventDate);
+      leaveEnd.setHours(21, 0, 0, 0);
+      const events = calendar.getEvents(leaveStart, leaveEnd, {
+        search: '業務時間外',
+      });
+      if (events.length === 0) {
+        calendar.createEvent('業務時間外', leaveStart, leaveEnd, {
+          reminders: { useDefault: false, overrides: [] },
+        });
+        Logger.log(
+          `行 ${rowNum}：年次有給の業務時間外イベント作成（9:00～21:00）`
+        );
+      } else {
+        events.forEach((event) => {
+          if (
+            event.getTitle() === '業務時間外' &&
+            (event.getStartTime().getTime() !== leaveStart.getTime() ||
+              event.getEndTime().getTime() !== leaveEnd.getTime())
+          ) {
+            event.setTime(leaveStart, leaveEnd);
+            Logger.log(
+              `行 ${rowNum}：年次有給の業務時間外イベント更新（9:00～21:00）`
+            );
+          }
+        });
+      }
+      return;
+    }
+
     // 終日イベントの処理
     processFullDayEvent(calendar, eventDate, title, rowNum);
 
