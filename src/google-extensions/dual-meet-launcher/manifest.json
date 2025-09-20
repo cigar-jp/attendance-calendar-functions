@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Dual Meet Launcher",
+  "version": "1.0",
+  "description": "Google Meetの会議室を作成し、ゲストモードで開きます。",
+  "permissions": [
+    "clipboardWrite",
+    "clipboardRead",
+    "windows",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": ["https://meet.google.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Dual Meet Launcher",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
