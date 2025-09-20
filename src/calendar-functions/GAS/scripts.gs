@@ -221,9 +221,9 @@ function addEventsFromSpreadsheet(user, diffData) {
 
     // 年次有給優先処理
     const leaveType = String(row[8]).trim();
-    if (leaveType === '年次有給') {
-      // 終日「年次有給」イベント
-      processFullDayEvent(calendar, eventDate, '年次有給', rowNum);
+    if (leaveType === '年次有給' || leaveType === 'リフレッシュ休暇') {
+      // 終日「年次有給」または「リフレッシュ休暇」イベント
+      processFullDayEvent(calendar, eventDate, leaveType, rowNum);
       // 9:00～21:00の業務時間外イベント
       const leaveStart = new Date(eventDate);
       leaveStart.setHours(9, 0, 0, 0);
@@ -237,7 +237,7 @@ function addEventsFromSpreadsheet(user, diffData) {
           reminders: { useDefault: false, overrides: [] },
         });
         Logger.log(
-          `行 ${rowNum}：年次有給の業務時間外イベント作成（9:00～21:00）`
+          `行 ${rowNum}：${leaveType}の業務時間外イベント作成（9:00～21:00）`
         );
       } else {
         events.forEach((event) => {
@@ -248,7 +248,7 @@ function addEventsFromSpreadsheet(user, diffData) {
           ) {
             event.setTime(leaveStart, leaveEnd);
             Logger.log(
-              `行 ${rowNum}：年次有給の業務時間外イベント更新（9:00～21:00）`
+              `行 ${rowNum}：${leaveType}の業務時間外イベント更新（9:00～21:00）`
             );
           }
         });
@@ -555,12 +555,69 @@ function convertTimeStringToDecimal(timeStr) {
 }
 
 /**
+ * CSVデータから対象月を抽出する（テスト用の純粋関数）
+ * @param {string} csvData CSV文字列
+ * @return {number[]} 昇順のユニーク月配列（例: [4,5]）
+ */
+function getDataMonths(csvData) {
+  const rows = Utilities.parseCsv(csvData);
+  if (rows.length < 2) return [];
+  const dates = rows.slice(1).map(function (row) {
+    return new Date(row[2]);
+  });
+  const monthsSet = {};
+  dates.forEach(function (d) {
+    const m = d.getMonth() + 1;
+    monthsSet[m] = true;
+  });
+  const months = Object.keys(monthsSet)
+    .map(function (k) {
+      return parseInt(k, 10);
+    })
+    .sort(function (a, b) {
+      return a - b;
+    });
+  return months;
+}
+
+/**
+ * 月でデータ行をフィルタ（テスト用の純粋関数）
+ * @param {any[][]} data A〜H列の行配列
+ * @param {number} targetMonth 1-12
+ */
+function filterDataByMonth(data, targetMonth) {
+  return data.filter(function (row) {
+    if (!row || row.length < 3) return false;
+    var d = new Date(row[2]);
+    return d.getMonth() + 1 === targetMonth;
+  });
+}
+
+/**
+ * 月プレフィックスの生成（例: 3 -> "3月_")
+ */
+function getMonthPrefix(month) {
+  return month + '月_';
+}
+
+/**
+ * CSVをA〜H列に整形（ヘッダーは返さずデータ行のみ、テストと同仕様）
+ */
+function formatCsvData(csvString) {
+  const rows = Utilities.parseCsv(csvString);
+  if (rows.length === 0) return [];
+  return rows.slice(1).map(function (row) {
+    return row.slice(0, 8);
+  });
+}
+
+/**
  * トリガーの設定を行う関数
  */
 function processSheets() {
   const ss = getSpreadsheet();
   const today = new Date();
-  const prefix = `${today.getMonth() + 1}月_`;
+  const prefix = `${today.getMonth() + 2}月_`;
   let diffData;
   const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
   const todaySheet = ss.getSheetByName(prefix + '今日分');
@@ -661,4 +718,82 @@ function extractDifferencesFromArrays(yesterdayData, todayData) {
     }
   }
   return differences;
+}
+
+/**
+ * CSV/シート整形ユーティリティ: A〜H列とCH列のみを残す
+ * - 行配列から、[0..7] および [85] (存在する場合) を抽出
+ * - CH列は存在しない場合は無視（A〜Hのみ残る）
+ */
+function keepAHAndCHColumns(rows) {
+  if (!rows || rows.length === 0) return [];
+  const result = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const kept = [];
+    // A〜H -> 0..7
+    for (let c = 0; c <= 7 && c < row.length; c++) kept.push(row[c]);
+    // CH -> index 85 (0-based)
+    if (row.length > 85) kept.push(row[85]);
+    result.push(kept);
+  }
+  return result;
+}
+
+/**
+ * CSV文字列をパースし、A〜H列とCH列を残した2次元配列を返す
+ */
+function formatCsvDataKeepAHAndCH(csvString) {
+  if (!csvString) return [];
+  const rows = Utilities.parseCsv(csvString);
+  return keepAHAndCHColumns(rows);
+}
+
+/**
+ * アクティブなシートで、A〜H列とCH列のみを残し、その他の列を削除する
+ * - 性能のため、削除は範囲で2回に分けて実行
+ *   1) CH(86)の右側を一括削除
+ *   2) I(9)〜CG(85)を一括削除 → CHが9列目に移動
+ * - CHが存在しない場合は I〜末尾を削除（A〜Hのみ残る）
+ */
+function cleanupActiveSheetColumnsAHandCH() {
+  const ss = getSpreadsheet();
+  const sheet = ss.getActiveSheet ? ss.getActiveSheet() : ss.getSheets()[0];
+  keepAHAndCHColumnsInSheet(sheet);
+}
+
+/**
+ * 指定シートでA〜HとCHのみ残す（上記の実体）
+ * Apps ScriptのdeleteColumnsは列が詰まる挙動のため、右側から/大きな範囲で削除
+ */
+function keepAHAndCHColumnsInSheet(sheet) {
+  if (!sheet) return;
+  let last = sheet.getLastColumn();
+  if (last <= 8) return; // そもそも8列以下
+
+  // Step1: CH(86)の右側を削除
+  if (last > 86) {
+    const count = last - 86;
+    sheet.deleteColumns(87, count);
+  }
+
+  // 最新の列数を取得し直し
+  last = sheet.getLastColumn();
+
+  // Step2: I(9)〜min(CG(85), last) を削除
+  const rightEnd = Math.min(85, last);
+  if (rightEnd >= 9) {
+    const count2 = rightEnd - 8; // 9..rightEnd まで
+    sheet.deleteColumns(9, count2);
+  }
+}
+
+/**
+ * スプレッドシートにカスタムメニューを追加
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('整形ツール')
+    .addItem('A〜HとCHのみ残す', 'cleanupActiveSheetColumnsAHandCH')
+    .addToUi();
 }

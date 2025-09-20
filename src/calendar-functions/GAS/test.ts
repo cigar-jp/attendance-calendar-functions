@@ -23,6 +23,9 @@ declare function getDataMonths(csv: string): number[];
 declare function filterDataByMonth(rows: any[][], month: number): any[];
 declare function getMonthPrefix(month: number): string;
 declare function formatCsvData(csv: string): any[][];
+// 新規ユーティリティ
+declare function keepAHAndCHColumns(rows: any[][]): any[][];
+declare function formatCsvDataKeepAHAndCH(csv: string): any[][];
 declare function calculateWorkingTimes(
   eventDate: Date,
   startTimeStr: string,
@@ -38,6 +41,8 @@ function runAllTests(): void {
   test_filterDataByMonth();
   test_getMonthPrefix();
   test_formatCsvData();
+  test_keepAHAndCHColumns();
+  test_formatCsvDataKeepAHAndCH();
   test_calculateWorkingTimes();
   test_convertTimeStringToDecimal();
   Logger.log('すべてのテストが成功しました');
@@ -84,6 +89,55 @@ function test_formatCsvData(): void {
     [['A', '1', '2025/04/01', 'g1', 'gName', '0', '09:00', '18:00']],
     'formatCsvData()'
   );
+}
+
+/**
+ * keepAHAndCHColumns のテスト
+ */
+function test_keepAHAndCHColumns(): void {
+  // 3行: 1行目はヘッダ、2行目はCH列あり、3行目はCH列なし
+  const rowWithCH: any[] = [];
+  for (let i = 0; i < 90; i++) rowWithCH.push('c' + i);
+  // A..H は c0..c7, CH は c85
+  const rows = [
+    ['A','B','C','D','E','F','G','H','I','J'],
+    rowWithCH,
+    ['a0','a1','a2','a3','a4','a5','a6','a7'],
+  ];
+  const kept = keepAHAndCHColumns(rows);
+  assertArrayEqual(
+    kept[0],
+    ['A','B','C','D','E','F','G','H'],
+    'keepAHAndCHColumns row0'
+  );
+  assertEqual(kept[0].length, 8, 'row0 length');
+  assertArrayEqual(
+    kept[1].slice(0, 9),
+    ['c0','c1','c2','c3','c4','c5','c6','c7','c85'],
+    'keepAHAndCHColumns row1 with CH'
+  );
+  assertEqual(kept[1].length, 9, 'row1 length');
+  assertArrayEqual(
+    kept[2],
+    ['a0','a1','a2','a3','a4','a5','a6','a7'],
+    'keepAHAndCHColumns row2 no CH'
+  );
+}
+
+/**
+ * formatCsvDataKeepAHAndCH のテスト
+ */
+function test_formatCsvDataKeepAHAndCH(): void {
+  // 86列以上のCSVを構築（0..89）
+  const header = Array.from({ length: 90 }, (_, i) => 'h' + i).join(',');
+  const row = Array.from({ length: 90 }, (_, i) => 'v' + i).join(',');
+  const csv = header + '\n' + row;
+  const out = formatCsvDataKeepAHAndCH(csv);
+  // 期待: A..H(h0..h7) + CH(h85) が残る => 9列
+  assertEqual(out[0].length, 9, 'header length');
+  assertArrayEqual(out[0].slice(0, 9), ['h0','h1','h2','h3','h4','h5','h6','h7','h85'], 'header cols');
+  assertEqual(out[1].length, 9, 'row length');
+  assertArrayEqual(out[1].slice(0, 9), ['v0','v1','v2','v3','v4','v5','v6','v7','v85'], 'row cols');
 }
 
 /**
