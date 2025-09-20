@@ -36,6 +36,13 @@
 
 推奨: 段階的移行。Phase1 は Option A で早期安定化 → Phase2 で Option B に移行。
 
+### 補足: 手順4/5のGCF実装可否と結論
+- 可否: 可能。GCF上で差分抽出とGoogle Calendar API更新まで完結できる（Option B）。
+- パフォーマンス/運用:
+	- GAS: 簡便だが実行時間/日次クォータと大規模データ操作でのパフォーマンス制約あり。
+	- GCF: コンテナ実行でリソース拡張が容易、ログ/監視/デプロイが一元化、スプレッドシートを介さないため堅牢。
+- 結論: 中長期的には GCF で 4/5 も置換（Option B）を推奨。短期は Option A でリスク低く移行し、安定後に完全移行。
+
 ## 詳細設計（Phase1: 最小移行）
 
 構成:
@@ -118,6 +125,37 @@
 - 1500行×9列 程度ならメモリ/CPUに十分収まる
 - Gmail/Calendar 呼び出しは指数バックオフでリトライ
 
+### カレンダー更新の冪等設計（GCF）
+目的: GASの `processSheets` のロジックをGCFに移植し、同一日・同一ユーザー・同一条件の再実行でも重複作成しない。
+
+キー設計:
+- 行キー: `${name}_${dateISO}`（例: "山田太郎_2025-04-01"）
+- 保存: Firestore か GCS(JSON) に key→eventId(s) を保存（終日/午前/午後/業務時間外などのタイプ別）
+
+イベントタイプと要件:
+- 終日イベント（タイトル: "公休" または "HH(.5)-HH(.5)"）
+- 業務時間外（午前）: 00:00〜勤務開始
+- 業務時間外（午後）: 勤務終了〜24:00
+- 有給/リフレッシュ: 終日イベント＋9:00〜21:00 の業務時間外（重複作成禁止）
+
+更新手順（擬似）:
+1. key を元に保存済み eventId を取得
+2. eventId が存在 → events.get で存在確認し、必要なら setTime/setSummary 相当の更新（Calendar API は patch）
+3. eventId 無し → 当該時間帯で `q`（検索語）や時間窓で events.list し、同等イベントがあれば採用・更新、無ければ create
+4. create/採用した eventId を保存（keyに紐づけてアップサート）
+
+API呼び出しの指針:
+- events.list は timeMin/timeMax + q="業務時間外" などで絞る
+- 日付境界は Asia/Tokyo で ISO 文字列に統一
+- 競合を避けるため、ユーザー毎に直列化 or keyベースのロック
+
+タイトル変換:
+- `convertTimeStringToDecimal` 相当をGCFで実装（"09:00"→"9", "20:30"→"20.5"）
+
+差分検出:
+- `extractDifferencesFromArrays` 相当の純粋関数をGCFへ移植
+- 比較対象はテンプレID/出勤/退勤（[5],[6],[7]）＋必要に応じて休日休暇名1（[8]）
+
 ## 段階的移行計画
 
 Phase 0（準備）
@@ -135,6 +173,7 @@ Phase 2（Option B 実装）
 - GCS/Firestore へのスナップショット保存と差分ロジック移植
 - Calendar API 直接更新（UsersMap を環境変数/Firestore管理へ）
 - Sheets/GAS 依存の撤去、モニタリング強化
+ - （任意）既存GASを停止/アーカイブ、ドキュメント更新
 
 ロールバック戦略:
 - 失敗時は従来のGAS/手動フローへ即時切替
@@ -151,6 +190,9 @@ Phase 2（Option B 実装）
 	- [ ] CSV パースと列縮約（A..H + CH）
 	- [ ] 月ごと分割と Sheets 反映（Phase1）
 	- [ ] （Phase2）前回スナップショット取得・差分抽出・Calendar 直接更新
+	  - [ ] `extractDifferencesFromArrays` の移植とユニットテスト
+	  - [ ] Calendar API upsert 実装（終日/午前/午後/有給対応）
+	  - [ ] eventId 永続化（Firestore/GCS）と冪等実装
 - [ ] ログ/メトリクス/アラート設定
 - [ ] ステージング→本番デプロイ、並走比較、チューニング
 
