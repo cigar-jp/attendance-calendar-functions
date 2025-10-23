@@ -304,7 +304,14 @@ function keepNeededColumnsSlim(rowsFull) {
   for (const r of data) {
     if (!r) continue;
     const name = r[0];
-    const dateValue = r[2];
+    const rawDate = r[2];
+    let dateValue = rawDate;
+    if (!(rawDate instanceof Date)) {
+      // 文字列を Date 化。失敗時はスキップ
+      const d = new Date(String(rawDate));
+      if (Number.isNaN(d.getTime())) continue;
+      dateValue = d;
+    }
     const templateId = r[5];
     const start = r[6];
     const end = r[7];
@@ -392,19 +399,9 @@ function bucketByMonth_(rows) {
   const buckets = new Map();
   for (const r of rows) {
     if (!r) continue;
-    let v = r[1];
-    // Date型なら getMonth()、文字列(YYYY-MM-DD...)なら substr で抽出
-    let monthNum;
-    if (v instanceof Date) {
-      monthNum = v.getMonth() + 1;
-    } else {
-      const s = String(v);
-      // 想定フォーマット: YYYY-MM-DD / YYYY/MM/DD 等
-      const mMatch = s.match(/^[0-9]{4}[-/](\d{2})[-/]/);
-      if (!mMatch) continue;
-      monthNum = parseInt(mMatch[1], 10);
-      if (!(monthNum >= 1 && monthNum <= 12)) continue;
-    }
+    const v = r[1];
+    if (!(v instanceof Date)) continue; // 正規化後は常に Date のはず
+    const monthNum = v.getMonth() + 1;
     if (!buckets.has(monthNum)) buckets.set(monthNum, []);
     buckets.get(monthNum).push(r);
   }
@@ -674,11 +671,16 @@ function rowsEqualSlim_(a, b) {
   for (let i = 0; i < 6; i++) {
     const av = a[i];
     const bv = b[i];
+    if (i === 1) { // date列
+      if (!(av instanceof Date) || !(bv instanceof Date)) return false;
+      if (av.getTime() !== bv.getTime()) return false;
+      continue;
+    }
     if (av instanceof Date && bv instanceof Date) {
       if (av.getTime() !== bv.getTime()) return false;
-    } else if (String(av) !== String(bv)) {
-      return false;
+      continue;
     }
+    if (String(av) !== String(bv)) return false;
   }
   return true;
 }
@@ -753,7 +755,16 @@ function addEventsFromSpreadsheet(user, rowsForUser) {
     return;
   }
 
+  const deletedRows = rowsForUser.filter(r => r[6] === 'DELETE');
   const data = rowsForUser.filter(r => r[6] !== 'DELETE');
+  // 削除行のイベント削除処理（公休/業務時間外/勤務時間外イベント）
+  for (const delRow of deletedRows) {
+    try {
+      removeEventsForDeletedDay(calendar, delRow);
+    } catch (e) {
+      Logger.log('[addEventsFromSpreadsheet] 削除イベント処理失敗: ' + e);
+    }
+  }
   if (data.length === 0) {
     Logger.log(`${user.name}の処理対象データが0件のため、処理を終了します。`);
     return;
@@ -980,6 +991,33 @@ function convertTimeStringToDecimal(timeStr) {
   if (minutes === 0) return hours.toString();
   if (minutes === 30) return hours + '.5';
   return (hours + minutes / 60).toFixed(2);
+}
+
+/**
+ * 削除行イベント削除: 1日の公休/業務時間外/勤務時間帯イベントを除去
+ * 対象: 終日イベントタイトルが '公休' または 勤務時間帯 (\d+(\.\d+)?-\d+(\.\d+)?)、部分イベント '業務時間外'
+ * @param {GoogleAppsScript.Calendar.Calendar} calendar
+ * @param {any[]} delRow Slim + 'DELETE'
+ */
+function removeEventsForDeletedDay(calendar, delRow) {
+  const dateCell = delRow[1];
+  const day = dateCell instanceof Date ? dateCell : new Date(dateCell);
+  if (Number.isNaN(day.getTime())) return;
+  const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+  const dayEnd = new Date(day); dayEnd.setHours(24,0,0,0);
+  const events = calendar.getEvents(dayStart, dayEnd);
+  const fullDayRegex = /^(公休|\d+(?:\.\d+)?-\d+(?:\.\d+)?)$/;
+  let removed = 0;
+  for (const ev of events) {
+    const title = ev.getTitle();
+    if (ev.isAllDayEvent() && fullDayRegex.test(title)) {
+      ev.deleteEvent(); removed++; continue;
+    }
+    if (title === '業務時間外') { ev.deleteEvent(); removed++; }
+  }
+  if (removed > 0) {
+    Logger.log(`[removeEventsForDeletedDay] ${Utilities.formatDate(dayStart, Session.getScriptTimeZone(), 'yyyy-MM-dd')} イベント削除: ${removed}件`);
+  }
 }
 
 /** ==== 参考: シート列削除ユーティリティ（非推奨・使わない想定。互換のため残置） ==== */
