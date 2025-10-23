@@ -51,7 +51,7 @@ function testIngestFromGmailOnce() {
     if (zips.length === 0) continue;
 
     for (const zipBlob of zips) {
-      const unzipped = Utilities.unzip(zipBlob);
+      const unzipped = Utilities.unzip(zipBlob.copyBlob());
       for (const file of unzipped) {
         // 中身でCSV判定（Shift_JIS優先）
         const csvText = decodeCsvText_(file);
