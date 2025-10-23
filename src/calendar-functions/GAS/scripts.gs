@@ -26,7 +26,7 @@ function getSpreadsheetTest() {
 }
 
 /**
- * 【乾いたテスト】Gmail→ZIP→CSV（Shift_JIS対応）→A..H+CH抽出→各月 TEST_シートへ書込み
+ * 【Dry Run テスト】Gmail→ZIP→CSV（Shift_JIS対応）→A..H+CH抽出→各月 TEST_シートへ書込み
  * - 1スレッド分だけ処理
  * - メールは「既読化」・「ラベル付与」しない（本番の副作用なし）
  * - ハッシュの幂等性チェックや Message-ID 記録もしない（純粋に取り込み確認）
