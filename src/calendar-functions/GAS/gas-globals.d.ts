@@ -125,3 +125,16 @@ type AttendanceRow = [
 
 // 差分行: DELETE タグ付与の可能性
 type DiffRow = AttendanceRow | [...AttendanceRow, 'DELETE'];
+
+// スリム版（不要列 B,D,E を除去しインデックス再構成）
+// [0]=name, [1]=dateValue, [2]=scheduleTemplateId, [3]=start, [4]=end, [5]=leaveType, ...rest
+type AttendanceRowSlim = [
+  name: string,
+  dateValue: string | Date,
+  scheduleTemplateId?: string | number,
+  start?: string | Date,
+  end?: string | Date,
+  leaveType?: string,
+  ...rest: any[]
+];
+type DiffRowSlim = AttendanceRowSlim | [...AttendanceRowSlim, 'DELETE'];
