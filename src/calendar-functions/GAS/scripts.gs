@@ -1,14 +1,339 @@
-/**
- * スプレッドシート取得ヘルパー
- */
+/****************************************************
+ * Jinjer 勤怠 取込～整形～差分処理・配信（当月＋翌月対応）
+ * - Gmail → ZIP（Shift_JIS対応）→ CSV → A..H + CH抽出
+ * - 月ごとに X月_昨日分 / X月_今日分 をローテーションして上書き
+ * - 幂等性：Message-ID＋シート行ハッシュで再実行を安全化
+ * - 最後に processSheets() で差分抽出→配信（当月＋翌月両方）
+ ****************************************************/
+
+/** ====== 設定値 ====== */
+const CFG = {
+  SUBJECT: '【jinjer勤怠】汎用データ_ダウンロード処理完了通知',
+  GMAIL_QUERY: 'label:jinjer勤怠 subject:"【jinjer勤怠】汎用データ_ダウンロード処理完了通知" from:entry@kintai.jinjer.biz has:attachment filename:zip newer_than:7d',
+  PROCESSED_LABEL: 'jinjer/processed',
+  NOTIFY_EMAIL: 'izm.master@izumogroup.co.jp',
+  SLACK_WEBHOOK_URL: '', // Slack不要なら空のまま
+};
+
+
+/** ====== ユーティリティ ====== */
+
+/** スプレッドシート取得（SPREADSHEET_IDはScript Propertiesに保存） */
 function getSpreadsheet() {
   return SpreadsheetApp.openById(
     PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')
   );
 }
 
+/** 16進文字列へ */
+function toHex_(bytes) {
+  return bytes.map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+}
+
+/** 値配列のMD5（幂等性チェック用）。大きい配列はJSON文字列化で十分実務的に堅牢 */
+function hashValues_(values) {
+  const json = JSON.stringify(values || []);
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, json);
+  return toHex_(bytes);
+}
+
+/** Slack通知（任意） */
+function notifySlack_(text) {
+  if (!CFG.SLACK_WEBHOOK_URL) return;
+  try {
+    UrlFetchApp.fetch(CFG.SLACK_WEBHOOK_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ text }),
+      muteHttpExceptions: true,
+    });
+  } catch (e) {
+    Logger.log('Slack通知失敗: ' + e);
+  }
+}
+
+/** ラベル取得・作成 */
+function getOrCreateLabel_(name) {
+  const ex = GmailApp.getUserLabelByName(name);
+  return ex || GmailApp.createLabel(name);
+}
+
+/** CSV Blob → 安全デコード（Shift_JIS優先。失敗時はUTF-8等フォールバック） */
+function decodeCsvText_(blob) {
+  const tryEncodings = ['Shift_JIS', 'Windows-31J', 'MS932', 'UTF-8'];
+  for (const enc of tryEncodings) {
+    try {
+      const text = blob.getDataAsString(enc);
+      if (looksLikeCsv_(text)) return text;
+    } catch (e) {}
+  }
+  return blob.getDataAsString(); // 最後の手段
+}
+
+/** ざっくりCSVっぽいか判定 */
+function looksLikeCsv_(text) {
+  if (!text) return false;
+  const lines = text.split(/\r\n|\n/);
+  if (lines.length < 2) return false;
+  const head = lines[0];
+  const comma = (head.match(/,/g) || []).length;
+  const tab = (head.match(/\t/g) || []).length;
+  return comma >= 1 || tab >= 1;
+}
+
 /**
- * 差分を抽出する
+ * A〜H と CH だけ残す（ヘッダー含む2次元配列→同様に返す）
+ * - 後段のシート列削除は使わない（配列整形で完結）
+ */
+function keepAHAndCHColumns(rows) {
+  if (!rows || rows.length === 0) return [];
+  const result = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const kept = [];
+    for (let c = 0; c <= 7 && c < row.length; c++) kept.push(row[c]); // A..H
+    if (row.length > 85) kept.push(row[85]); // CH
+    result.push(kept);
+  }
+  return result;
+}
+
+/**
+ * todayName を yesterdayName に退避し、todayName に values を上書き
+ * - 幅優先: 1回の setValues で高速化
+ * - 幂等性: 書き込み前に既存 today の MD5 と比較し、同一ならスキップ
+ * - ハッシュは Script Properties に保存（キー HASH_{todayName}）
+ */
+function rotateAndWrite_(ss, todayName, yesterdayName, values) {
+  if (!values || values.length === 0) return;
+
+  // 既存 today の値を取得してハッシュ比較
+  const prop = PropertiesService.getScriptProperties();
+  const hashKey = 'HASH_' + todayName;
+
+  /** 現在のtodayのvaluesを取得 */
+  const todaySheetExisting = ss.getSheetByName(todayName);
+  let existingValues = [];
+  if (todaySheetExisting) {
+    const rng = todaySheetExisting.getDataRange();
+    existingValues = rng ? rng.getValues() : [];
+  }
+
+  const newHash = hashValues_(values);
+  const oldHash = prop.getProperty(hashKey);
+
+  // 既存と同じならローテ＆書き込みを省略（幂等）
+  if (oldHash && oldHash === newHash) {
+    Logger.log(`[rotateAndWrite_] skip write (same hash): ${todayName}`);
+    return;
+  }
+
+  // 退避: 今日分 → 昨日分
+  if (todaySheetExisting) {
+    const yesterday = ss.getSheetByName(yesterdayName) || ss.insertSheet(yesterdayName);
+    yesterday.clearContents();
+    if (existingValues && existingValues.length > 0) {
+      yesterday.getRange(1, 1, existingValues.length, existingValues[0].length).setValues(existingValues);
+    }
+    todaySheetExisting.clearContents();
+  }
+
+  // 書き込み
+  const target = ss.getSheetByName(todayName) || ss.insertSheet(todayName);
+  target.getRange(1, 1, values.length, values[0].length).setValues(values);
+
+  // ハッシュ更新
+  prop.setProperty(hashKey, newHash);
+}
+
+/** 当月・翌月の数値を返す（1-12） */
+function getCurrentAndNextMonth_() {
+  const today = new Date();
+  const cur = today.getMonth() + 1;
+  const next = cur === 12 ? 1 : cur + 1;
+  return [cur, next];
+}
+
+/** rows（データ行）を月ごと（C列= index 2 の日付）にバケツ分け */
+function bucketByMonth_(rows) {
+  const buckets = new Map(); // month -> rows[]
+  for (const r of rows) {
+    const d = new Date(r[2]);
+    if (isNaN(d)) continue;
+    const m = d.getMonth() + 1;
+    if (!buckets.has(m)) buckets.set(m, []);
+    buckets.get(m).push(r);
+  }
+  return buckets;
+}
+
+/** 例外メール通知 */
+function notifyFailure_(where, err) {
+  Logger.log(`[${where}] ${err && (err.stack || err)}`);
+  MailApp.sendEmail({
+    to: CFG.NOTIFY_EMAIL,
+    subject: `【自動取込エラー】${where}`,
+    htmlBody: `<pre>${(err && (err.stack || err)) || ''}</pre>`,
+  });
+  notifySlack_(`:warning: 取込エラー at *${where}*\n\`\`\`${(err && (err.stack || err)) || ''}\`\`\``);
+}
+
+/** ====== メイン：Gmail→ZIP→CSV→シート ====== */
+/**
+ * 毎朝の時刻トリガー用：Gmailからzip(csv)を取り込み、A..H+CH抽出し、月ごとに今日分更新→ processSheets()
+ * - 当月＋翌月の両方を正しく処理
+ * - 既読化＋ラベル付与
+ * - Message-ID重複防止
+ */
+function ingestFromGmail() {
+  const label = getOrCreateLabel_(CFG.PROCESSED_LABEL);
+  try {
+    const ss = getSpreadsheet();
+    const threads = GmailApp.search(CFG.GMAIL_QUERY, 0, 20);
+    if (threads.length === 0) {
+      Logger.log('[ingestFromGmail] no threads');
+      processSheets(); // 念のため走らせる（他経路で今日分更新された場合）
+      return;
+    }
+
+    // 既処理Message-ID集合
+    const prop = PropertiesService.getScriptProperties();
+    const doneSet = new Set(JSON.parse(prop.getProperty('DONE_MSG_IDS') || '[]'));
+    const processedMsgIds = [];
+
+    for (const th of threads) {
+      const msgs = th.getMessages();
+      for (const m of msgs) {
+        const id = m.getId();
+        if (doneSet.has(id)) continue;
+
+        const atts = m.getAttachments({ includeInlineImages: false, includeAttachments: true });
+        if (!atts || atts.length === 0) continue;
+
+        // zipのみ対象
+        const zips = atts.filter(a => /\.zip$/i.test(a.getName()));
+        if (zips.length === 0) continue;
+
+        for (const zipBlob of zips) {
+          let unzipped;
+          try {
+            unzipped = Utilities.unzip(zipBlob);
+          } catch (e) {
+            notifyFailure_('unzip', e);
+            continue;
+          }
+
+          for (const file of unzipped) {
+            // 拡張子文字化けの可能性があるので中身でCSV判定
+            let csvText, rows;
+            try {
+              csvText = decodeCsvText_(file);
+              rows = Utilities.parseCsv(csvText);
+            } catch (e) {
+              notifyFailure_('decode/parseCsv', e);
+              continue;
+            }
+
+            // A..H + CH のみに整形
+            const filtered = keepAHAndCHColumns(rows);
+            const dataOnly = filtered.length > 1 ? filtered.slice(1) : [];
+            if (dataOnly.length === 0) continue;
+
+            // 月ごとにバケツ
+            const buckets = bucketByMonth_(dataOnly);
+            buckets.forEach((valuesForMonth, month) => {
+              // 当月 or 翌月のみ受け付けたい場合はここでフィルタ
+              // 今回は両方OK（=その他の月は無視）
+              const [cur, nxt] = getCurrentAndNextMonth_();
+              if (month !== cur && month !== nxt) {
+                Logger.log(`[ingestFromGmail] skip month=${month} (only cur/next)`);
+                return;
+              }
+              const prefix = `${month}月_`;
+              rotateAndWrite_(ss, prefix + '今日分', prefix + '昨日分', valuesForMonth);
+            });
+          }
+        }
+
+        th.addLabel(label);
+        m.markRead();
+        processedMsgIds.push(id);
+      }
+    }
+
+    // Message-ID 永続化（最近500件）
+    if (processedMsgIds.length > 0) {
+      const union = new Set([...doneSet, ...processedMsgIds]);
+      prop.setProperty('DONE_MSG_IDS', JSON.stringify(Array.from(union).slice(-500)));
+    }
+
+    // 取り込み完了後に差分処理・配信
+    processSheets();
+
+  } catch (err) {
+    notifyFailure_('ingestFromGmail', err);
+    throw err;
+  }
+}
+
+/** ====== 差分抽出・配信（当月＋翌月） ====== */
+/**
+ * 既存の processSheets を**月対応**に拡張
+ * - 「当月」「翌月」の2つの prefix について、それぞれ実行
+ * - 既存の extractDifferences, processAllUsers を**そのまま活用**
+ * - 差分シート作成は extractDifferences() 内の仕様（Diff_{月}月）を踏襲
+ */
+function processSheets() {
+  const ss = getSpreadsheet();
+  const [curMonth, nextMonth] = getCurrentAndNextMonth_();
+  const targetMonths = [curMonth, nextMonth];
+
+  targetMonths.forEach(month => {
+    const prefix = `${month}月_`;
+    let diffData;
+    const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
+    const todaySheet = ss.getSheetByName(prefix + '今日分');
+
+    if (!todaySheet) {
+      Logger.log(`[processSheets] シートが見つかりません: ${prefix}今日分`);
+      return;
+    }
+
+    if (!yesterdaySheet) {
+      // 昨日分が無ければ、今日分全量を差分として扱う
+      const values = todaySheet.getDataRange().getValues();
+      diffData = values.length > 1 ? values.slice(1) : [];
+    } else {
+      try {
+        diffData = extractDifferences(prefix);
+      } catch (e) {
+        Logger.log(`[processSheets] 差分抽出エラー (${prefix}): ` + e.toString());
+        return;
+      }
+    }
+
+    if (diffData && diffData.length > 0) {
+      // 差分のブレークダウン（従来と同じ命名へ合わせる）
+      const diffSheetName = prefix + '差分';
+      const existingSheet = ss.getSheetByName(diffSheetName);
+      if (existingSheet) ss.deleteSheet(existingSheet);
+      const newSheet = ss.insertSheet(diffSheetName);
+      newSheet.getRange(1, 1, diffData.length, diffData[0].length).setValues(diffData);
+
+      // 既存のユーザー配信ロジック
+      processAllUsers(diffData);
+    } else {
+      Logger.log(`[processSheets] 差分なし: ${prefix}`);
+    }
+  });
+}
+
+/** ====== 既存の差分抽出・配信ロジック（軽微調整 or そのまま） ====== */
+
+/**
+ * 差分を抽出する（既存関数そのまま）
+ * - monthPrefix: "3月_" のような接頭辞
+ * - Diff_{月}月 シートを作成（既存仕様）
  */
 function extractDifferences(monthPrefix) {
   const ss = getSpreadsheet();
@@ -29,11 +354,9 @@ function extractDifferences(monthPrefix) {
   const yesterdayData = yesterdaySheet.getDataRange().getValues();
   const todayData = todaySheet.getDataRange().getValues();
 
-  // 差分を格納する配列
   const differences = [];
   let loggedFirst = false;
 
-  // データをMap化して検索を高速化
   const yesterdayMap = new Map();
   for (let i = 1; i < yesterdayData.length; i++) {
     const row = yesterdayData[i];
@@ -55,7 +378,7 @@ function extractDifferences(monthPrefix) {
   Logger.log(yesterdayMap.size);
   Logger.log(todayMap.size);
 
-  // 今日のデータを処理
+  // 追加・変更
   for (const [key, todayRow] of todayMap.entries()) {
     const yRow = yesterdayMap.get(key);
     const yTemplate = yRow ? String(yRow[5]).trim() : null;
@@ -74,21 +397,14 @@ function extractDifferences(monthPrefix) {
       todayRow[6] instanceof Date ? todayRow[6].getTime() : todayRow[6];
     const tEnd =
       todayRow[7] instanceof Date ? todayRow[7].getTime() : todayRow[7];
-    // 完全一致する場合は差分に含めない
+
     if (yRow && JSON.stringify(yRow) === JSON.stringify(todayRow)) {
       continue;
     }
-    if (
-      !yRow ||
-      yTemplate !== tTemplate ||
-      yStart !== tStart ||
-      yEnd !== tEnd
-    ) {
+    if (!yRow || yTemplate !== tTemplate || yStart !== tStart || yEnd !== tEnd) {
       if (!loggedFirst) {
         Logger.log('first diff key: ' + key);
-        Logger.log(
-          'first diff yesterday: ' + JSON.stringify(yesterdayMap.get(key))
-        );
+        Logger.log('first diff yesterday: ' + JSON.stringify(yesterdayMap.get(key)));
         Logger.log('first diff today: ' + JSON.stringify(todayRow));
         loggedFirst = true;
       }
@@ -96,20 +412,18 @@ function extractDifferences(monthPrefix) {
     }
   }
 
-  // 昨日あって今日ない予定を検出（削除された予定）
+  // 削除
   for (const [key, yesterdayRow] of yesterdayMap.entries()) {
     if (!todayMap.has(key)) {
-      // 削除マーカーを付与して差分に追加
-      yesterdayRow.push('DELETE');
-      differences.push(yesterdayRow);
+      const delRow = yesterdayRow.slice();
+      delRow.push('DELETE');
+      differences.push(delRow);
     }
   }
 
   Logger.log('differences: ' + differences.length);
 
-  // 差分があれば新しいシートとして保存
   if (differences.length > 0) {
-    // ヘッダーを含めてシートに保存（ヘッダー行は昨日シートの1行目を再利用）
     const headers = yesterdayData[0];
     const month = parseInt(monthPrefix.match(/(\d+)月/)[1], 10);
     const sheetName = `Diff_${month}月`;
@@ -117,22 +431,19 @@ function extractDifferences(monthPrefix) {
     if (existing) ss.deleteSheet(existing);
     const newDiffSheet = ss.insertSheet(sheetName);
     newDiffSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-    newDiffSheet
-      .getRange(2, 1, differences.length, differences[0].length)
-      .setValues(differences);
+    newDiffSheet.getRange(2, 1, differences.length, differences[0].length).setValues(differences);
   }
 
   return differences;
 }
 
+/** 以降、ユーザー配信・イベント生成ロジックは提供頂いた既存関数をそのまま配置 */
 function processAllUsers(diffData) {
-  // 差分データがない場合は処理を終了
   if (!diffData || diffData.length === 0) {
     Logger.log('処理対象のデータがありません');
     return;
   }
 
-  // ユーザーマップ
   const usersMap = [
     { name: '福田 真一', email: 's.fukuda@izumogroup.co.jp' },
     { name: '塩田 敬子', email: 't.shioda@izumogroup.co.jp' },
@@ -167,32 +478,22 @@ function processAllUsers(diffData) {
     { name: '桒原 未来', email: 'm.kuwabara@medelbeauty.jp' },
   ];
 
-  // 各ユーザーごとに処理
   usersMap.forEach((user) => {
     Logger.log('処理開始: ' + user.name + ' (' + user.email + ')');
-    // イベント追加処理を実行
     addEventsFromSpreadsheet(user, diffData);
   });
-
-  Logger.log('全ユーザーの処理が完了しました');
 }
 
-/**
- * スプレッドシートからデータを取得し、Google カレンダーにイベントとして登録する
- * ※A列がプロパティで指定された名前の行のみ処理します。
- */
+/** 以下 addEventsFromSpreadsheet / validate* / generateEventTitle / process* は既存どおり */
 function addEventsFromSpreadsheet(user, diffData) {
-  // バリデーションチェック
   if (!validateInputs(user)) return;
 
-  // カレンダーの取得
   const calendar = CalendarApp.getCalendarById(user.email);
   if (!calendar) {
     Logger.log('指定のカレンダーが見つかりません: ' + user.email);
     return;
   }
 
-  // ユーザーの差分データを抽出
   const filteredData = diffData.filter(
     (row) => String(row[0]).trim() === user.name
   );
@@ -201,108 +502,67 @@ function addEventsFromSpreadsheet(user, diffData) {
     return;
   }
 
-  // フィルタ済みデータを処理
   filteredData.forEach((row, index) => {
     const rowNum = index + 1;
 
-    // 基本データの検証
     const eventDetails = validateEventData(row, rowNum);
     if (!eventDetails) return;
 
-    const { eventDate, scheduleTemplateId, startTimeStr, endTimeStr } =
-      eventDetails;
+    const { eventDate, scheduleTemplateId, startTimeStr, endTimeStr } = eventDetails;
 
-    // イベントタイトルの生成
     const title = generateEventTitle(
       scheduleTemplateId,
       startTimeStr,
       endTimeStr
     );
 
-    // 年次有給優先処理
     const leaveType = String(row[8]).trim();
     if (leaveType === '年次有給' || leaveType === 'リフレッシュ休暇') {
-      // 終日「年次有給」または「リフレッシュ休暇」イベント
       processFullDayEvent(calendar, eventDate, leaveType, rowNum);
-      // 9:00～21:00の業務時間外イベント
-      const leaveStart = new Date(eventDate);
-      leaveStart.setHours(9, 0, 0, 0);
-      const leaveEnd = new Date(eventDate);
-      leaveEnd.setHours(21, 0, 0, 0);
-      const events = calendar.getEvents(leaveStart, leaveEnd, {
-        search: '業務時間外',
-      });
+      const leaveStart = new Date(eventDate); leaveStart.setHours(9, 0, 0, 0);
+      const leaveEnd   = new Date(eventDate); leaveEnd.setHours(21, 0, 0, 0);
+      const events = calendar.getEvents(leaveStart, leaveEnd, { search: '業務時間外' });
       if (events.length === 0) {
-        calendar.createEvent('業務時間外', leaveStart, leaveEnd, {
-          reminders: { useDefault: false, overrides: [] },
-        });
-        Logger.log(
-          `行 ${rowNum}：${leaveType}の業務時間外イベント作成（9:00～21:00）`
-        );
+        calendar.createEvent('業務時間外', leaveStart, leaveEnd, { reminders: { useDefault: false, overrides: [] } });
+        Logger.log(`行 ${rowNum}：${leaveType}の業務時間外イベント作成（9:00～21:00）`);
       } else {
         events.forEach((event) => {
-          if (
-            event.getTitle() === '業務時間外' &&
-            (event.getStartTime().getTime() !== leaveStart.getTime() ||
-              event.getEndTime().getTime() !== leaveEnd.getTime())
-          ) {
+          if (event.getTitle() === '業務時間外' &&
+              (event.getStartTime().getTime() !== leaveStart.getTime() ||
+               event.getEndTime().getTime()   !== leaveEnd.getTime())) {
             event.setTime(leaveStart, leaveEnd);
-            Logger.log(
-              `行 ${rowNum}：${leaveType}の業務時間外イベント更新（9:00～21:00）`
-            );
+            Logger.log(`行 ${rowNum}：${leaveType}の業務時間外イベント更新（9:00～21:00）`);
           }
         });
       }
       return;
     }
 
-    // 終日イベントの処理
     processFullDayEvent(calendar, eventDate, title, rowNum);
 
-    // 勤務時間外イベント処理
     if (scheduleTemplateId === '0') {
-      // 公休日の場合、9:00-21:00まで業務時間外イベント作成
-      const holidayStart = new Date(eventDate);
-      holidayStart.setHours(9, 0, 0, 0);
-      const holidayEnd = new Date(eventDate);
-      holidayEnd.setHours(21, 0, 0, 0);
-      const events = calendar.getEvents(holidayStart, holidayEnd, {
-        search: '業務時間外',
-      });
+      const holidayStart = new Date(eventDate); holidayStart.setHours(9, 0, 0, 0);
+      const holidayEnd   = new Date(eventDate); holidayEnd.setHours(21, 0, 0, 0);
+      const events = calendar.getEvents(holidayStart, holidayEnd, { search: '業務時間外' });
       if (events.length === 0) {
-        calendar.createEvent('業務時間外', holidayStart, holidayEnd, {
-          reminders: { useDefault: false, overrides: [] },
-        });
+        calendar.createEvent('業務時間外', holidayStart, holidayEnd, { reminders: { useDefault: false, overrides: [] } });
         Logger.log(`行 ${rowNum}：公休の業務時間外イベント作成（9:00～21:00）`);
       } else {
         events.forEach((event) => {
-          if (
-            event.getTitle() === '業務時間外' &&
-            (event.getStartTime().getTime() !== holidayStart.getTime() ||
-              event.getEndTime().getTime() !== holidayEnd.getTime())
-          ) {
+          if (event.getTitle() === '業務時間外' &&
+              (event.getStartTime().getTime() !== holidayStart.getTime() ||
+               event.getEndTime().getTime()   !== holidayEnd.getTime())) {
             event.setTime(holidayStart, holidayEnd);
-            Logger.log(
-              `行 ${rowNum}：公休の業務時間外イベント更新（9:00～21:00）`
-            );
+            Logger.log(`行 ${rowNum}：公休の業務時間外イベント更新（9:00～21:00）`);
           }
         });
       }
     } else {
-      processWorkingHoursEvents(
-        calendar,
-        eventDate,
-        startTimeStr,
-        endTimeStr,
-        rowNum
-      );
+      processWorkingHoursEvents(calendar, eventDate, startTimeStr, endTimeStr, rowNum);
     }
   });
 }
 
-/**
- * 入力データの基本バリデーション
- */
 function validateInputs(user) {
   const scriptProperties = PropertiesService.getScriptProperties();
   const spreadsheetId = scriptProperties.getProperty('SPREADSHEET_ID');
@@ -314,9 +574,6 @@ function validateInputs(user) {
   return true;
 }
 
-/**
- * イベントデータの検証
- */
 function validateEventData(row, rowNum) {
   const dateStr = row[2];
   if (!dateStr) {
@@ -330,57 +587,33 @@ function validateEventData(row, rowNum) {
   let endTimeStr = row[7];
 
   if (scheduleTemplateId !== '0' && (!startTimeStr || !endTimeStr)) {
-    Logger.log(
-      `行 ${rowNum}：出勤予定時刻または退勤予定時刻が空のためスキップ`
-    );
+    Logger.log(`行 ${rowNum}：出勤予定時刻または退勤予定時刻が空のためスキップ`);
     return null;
   }
 
-  // 時刻フォーマットの統一
   if (startTimeStr instanceof Date) {
-    startTimeStr = Utilities.formatDate(
-      startTimeStr,
-      Session.getScriptTimeZone(),
-      'HH:mm'
-    );
+    startTimeStr = Utilities.formatDate(startTimeStr, Session.getScriptTimeZone(), 'HH:mm');
   }
   if (endTimeStr instanceof Date) {
-    endTimeStr = Utilities.formatDate(
-      endTimeStr,
-      Session.getScriptTimeZone(),
-      'HH:mm'
-    );
+    endTimeStr = Utilities.formatDate(endTimeStr, Session.getScriptTimeZone(), 'HH:mm');
   }
 
   return { eventDate, scheduleTemplateId, startTimeStr, endTimeStr };
 }
 
-/**
- * イベントタイトルの生成
- */
 function generateEventTitle(scheduleTemplateId, startTimeStr, endTimeStr) {
   if (scheduleTemplateId === '0') return '公休';
-
   const startDecimal = convertTimeStringToDecimal(startTimeStr);
   const endDecimal = convertTimeStringToDecimal(endTimeStr);
   return `${startDecimal}-${endDecimal}`;
 }
 
-/**
- * 終日イベントの処理
- */
 function processFullDayEvent(calendar, eventDate, title, rowNum) {
-  const existingFullDay = calendar
-    .getEventsForDay(eventDate)
-    .filter((event) => event.isAllDayEvent());
+  const existingFullDay = calendar.getEventsForDay(eventDate).filter((event) => event.isAllDayEvent());
 
   if (existingFullDay.length === 0) {
-    calendar.createAllDayEvent(title, eventDate, {
-      reminders: { useDefault: false, overrides: [] },
-    });
-    Logger.log(
-      `行 ${rowNum}：終日イベント作成: ${eventDate.toDateString()} / タイトル: ${title}`
-    );
+    calendar.createAllDayEvent(title, eventDate, { reminders: { useDefault: false, overrides: [] } });
+    Logger.log(`行 ${rowNum}：終日イベント作成: ${eventDate.toDateString()} / タイトル: ${title}`);
     return;
   }
 
@@ -391,9 +624,7 @@ function processFullDayEvent(calendar, eventDate, title, rowNum) {
     const currentTitle = event.getTitle();
     if (regex.test(currentTitle) && currentTitle !== title) {
       event.setTitle(title);
-      Logger.log(
-        `行 ${rowNum}：既存イベントのタイトルを更新しました: ${title}`
-      );
+      Logger.log(`行 ${rowNum}：既存イベントのタイトルを更新しました: ${title}`);
       updated = true;
     }
   });
@@ -403,93 +634,38 @@ function processFullDayEvent(calendar, eventDate, title, rowNum) {
   }
 }
 
-/**
- * 業務時間外イベントの処理
- */
-function processWorkingHoursEvents(
-  calendar,
-  eventDate,
-  startTimeStr,
-  endTimeStr,
-  rowNum
-) {
+function processWorkingHoursEvents(calendar, eventDate, startTimeStr, endTimeStr, rowNum) {
   const times = calculateWorkingTimes(eventDate, startTimeStr, endTimeStr);
 
-  // 午前の業務時間外イベント処理
-  processPeriodEvent(
-    calendar,
-    times.dayStart,
-    times.workingStartTime,
-    rowNum,
-    '午前'
-  );
-
-  // 午後の業務時間外イベント処理
-  processPeriodEvent(
-    calendar,
-    times.workingEndTime,
-    times.dayEnd,
-    rowNum,
-    '午後'
-  );
+  processPeriodEvent(calendar, times.dayStart,        times.workingStartTime, rowNum, '午前');
+  processPeriodEvent(calendar, times.workingEndTime,  times.dayEnd,           rowNum, '午後');
 }
 
-/**
- * 業務時間の計算
- */
 function calculateWorkingTimes(eventDate, startTimeStr, endTimeStr) {
-  const startParts = startTimeStr.split(':');
-  const endParts = endTimeStr.split(':');
+  const startParts = String(startTimeStr).split(':');
+  const endParts   = String(endTimeStr).split(':');
 
-  let dayStart = new Date(eventDate);
-  dayStart.setHours(0, 0, 0, 0);
-
-  let dayEnd = new Date(eventDate);
-  dayEnd.setHours(24, 0, 0, 0);
+  let dayStart = new Date(eventDate); dayStart.setHours(0, 0, 0, 0);
+  let dayEnd   = new Date(eventDate); dayEnd.setHours(24, 0, 0, 0);
 
   let workingStartTime = new Date(eventDate);
-  workingStartTime.setHours(
-    parseInt(startParts[0], 10),
-    parseInt(startParts[1], 10),
-    0,
-    0
-  );
+  workingStartTime.setHours(parseInt(startParts[0], 10), parseInt(startParts[1], 10), 0, 0);
 
   let workingEndTime = new Date(eventDate);
-  workingEndTime.setHours(
-    parseInt(endParts[0], 10),
-    parseInt(endParts[1], 10),
-    0,
-    0
-  );
+  workingEndTime.setHours(parseInt(endParts[0], 10), parseInt(endParts[1], 10), 0, 0);
 
   return { dayStart, dayEnd, workingStartTime, workingEndTime };
 }
 
-/**
- * 特定期間のイベント処理（午前・午後共通）
- */
 function processPeriodEvent(calendar, startTime, endTime, rowNum, period) {
-  const events = calendar.getEvents(startTime, endTime, {
-    search: '業務時間外',
-  });
+  const events = calendar.getEvents(startTime, endTime, { search: '業務時間外' });
   const timeStr =
     period === '午前'
-      ? `0～${Utilities.formatDate(
-          endTime,
-          Session.getScriptTimeZone(),
-          'HH:mm'
-        )}`
-      : `${Utilities.formatDate(
-          startTime,
-          Session.getScriptTimeZone(),
-          'HH:mm'
-        )}～24:00`;
+      ? `0～${Utilities.formatDate(endTime, Session.getScriptTimeZone(), 'HH:mm')}`
+      : `${Utilities.formatDate(startTime, Session.getScriptTimeZone(), 'HH:mm')}～24:00`;
 
   if (events.length === 0) {
-    calendar.createEvent('業務時間外', startTime, endTime, {
-      reminders: { useDefault: false, overrides: [] },
-    });
+    calendar.createEvent('業務時間外', startTime, endTime, { reminders: { useDefault: false, overrides: [] } });
     Logger.log(`行 ${rowNum}：${period}の業務時間外イベント作成（${timeStr}）`);
     return;
   }
@@ -500,300 +676,62 @@ function processPeriodEvent(calendar, startTime, endTime, rowNum, period) {
   events.forEach((event) => {
     if (regex.test(event.getTitle())) {
       const currentStart = event.getStartTime();
-      const currentEnd = event.getEndTime();
+      const currentEnd   = event.getEndTime();
 
-      if (
-        currentStart.getTime() !== startTime.getTime() ||
-        currentEnd.getTime() !== endTime.getTime()
-      ) {
+      if (currentStart.getTime() !== startTime.getTime() || currentEnd.getTime() !== endTime.getTime()) {
         event.setTime(startTime, endTime);
-        Logger.log(
-          `行 ${rowNum}：${period}の業務時間外イベント更新（新: ${timeStr}）`
-        );
+        Logger.log(`行 ${rowNum}：${period}の業務時間外イベント更新（新: ${timeStr}）`);
         updated = true;
       }
     }
   });
 
   if (!updated) {
-    Logger.log(
-      `行 ${rowNum}：${period}の業務時間外イベントは既に最新の状態です`
-    );
+    Logger.log(`行 ${rowNum}：${period}の業務時間外イベントは既に最新の状態です`);
   }
 }
 
-/**
- * 時刻文字列を小数表記の文字列に変換する関数
- * 例: "9:00" → "9", "20:30" → "20.5"
- *
- * @param {string} timeStr - "HH:mm" 形式の文字列
- * @return {string} 小数表記の時刻文字列
- */
 function convertTimeStringToDecimal(timeStr) {
-  // Dateオブジェクトの場合は文字列に変換
   if (timeStr instanceof Date) {
-    timeStr = Utilities.formatDate(
-      timeStr,
-      Session.getScriptTimeZone(),
-      'HH:mm'
-    );
+    timeStr = Utilities.formatDate(timeStr, Session.getScriptTimeZone(), 'HH:mm');
   }
-
-  const parts = timeStr.split(':');
-  if (parts.length !== 2) return timeStr;
+  const parts = String(timeStr).split(':');
+  if (parts.length !== 2) return String(timeStr);
 
   const hours = parseInt(parts[0], 10);
   const minutes = parseInt(parts[1], 10);
 
-  if (minutes === 0) {
-    return hours.toString();
-  } else if (minutes === 30) {
-    return hours + '.5';
-  } else {
-    return (hours + minutes / 60).toFixed(2);
-  }
+  if (minutes === 0) return hours.toString();
+  if (minutes === 30) return hours + '.5';
+  return (hours + minutes / 60).toFixed(2);
 }
 
-/**
- * CSVデータから対象月を抽出する（テスト用の純粋関数）
- * @param {string} csvData CSV文字列
- * @return {number[]} 昇順のユニーク月配列（例: [4,5]）
- */
-function getDataMonths(csvData) {
-  const rows = Utilities.parseCsv(csvData);
-  if (rows.length < 2) return [];
-  const dates = rows.slice(1).map(function (row) {
-    return new Date(row[2]);
-  });
-  const monthsSet = {};
-  dates.forEach(function (d) {
-    const m = d.getMonth() + 1;
-    monthsSet[m] = true;
-  });
-  const months = Object.keys(monthsSet)
-    .map(function (k) {
-      return parseInt(k, 10);
-    })
-    .sort(function (a, b) {
-      return a - b;
-    });
-  return months;
-}
-
-/**
- * 月でデータ行をフィルタ（テスト用の純粋関数）
- * @param {any[][]} data A〜H列の行配列
- * @param {number} targetMonth 1-12
- */
-function filterDataByMonth(data, targetMonth) {
-  return data.filter(function (row) {
-    if (!row || row.length < 3) return false;
-    var d = new Date(row[2]);
-    return d.getMonth() + 1 === targetMonth;
-  });
-}
-
-/**
- * 月プレフィックスの生成（例: 3 -> "3月_")
- */
-function getMonthPrefix(month) {
-  return month + '月_';
-}
-
-/**
- * CSVをA〜H列に整形（ヘッダーは返さずデータ行のみ、テストと同仕様）
- */
-function formatCsvData(csvString) {
-  const rows = Utilities.parseCsv(csvString);
-  if (rows.length === 0) return [];
-  return rows.slice(1).map(function (row) {
-    return row.slice(0, 8);
-  });
-}
-
-/**
- * トリガーの設定を行う関数
- */
-function processSheets() {
-  const ss = getSpreadsheet();
-  const today = new Date();
-  const prefix = `${today.getMonth() + 2}月_`;
-  let diffData;
-  const yesterdaySheet = ss.getSheetByName(prefix + '昨日分');
-  const todaySheet = ss.getSheetByName(prefix + '今日分');
-  if (!todaySheet) {
-    Logger.log('シートが見つかりません: ' + prefix + '今日分');
-    return;
-  }
-  if (!yesterdaySheet) {
-    const values = todaySheet.getDataRange().getValues();
-    diffData = values.slice(1);
-  } else {
-    try {
-      diffData = extractDifferences(prefix);
-    } catch (e) {
-      Logger.log('差分抽出でエラー: ' + e.toString());
-      return;
-    }
-  }
-  if (diffData && diffData.length > 0) {
-    // 差分データを新規シートに書き込み
-    const diffSheetName = prefix + '差分';
-    const existingSheet = ss.getSheetByName(diffSheetName);
-    if (existingSheet) ss.deleteSheet(existingSheet);
-    const newSheet = ss.insertSheet(diffSheetName);
-    newSheet
-      .getRange(1, 1, diffData.length, diffData[0].length)
-      .setValues(diffData);
-    processAllUsers(diffData);
-  } else {
-    Logger.log('差分がありませんでした');
-  }
-}
-
-function setupTrigger() {
-  // タイムゾーンをログ出力
-  const tz = Session.getScriptTimeZone();
-  Logger.log('設定するタイムゾーン: ' + tz);
-
-  // 既存のトリガーを全て削除
-  const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach((trigger) => {
-    if (trigger.getHandlerFunction() === 'processSheets') {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
-  // 新しいトリガーを作成（毎日午前6時に実行）
-  ScriptApp.newTrigger('processSheets')
-    .timeBased()
-    .everyDays(1)
-    .atHour(6)
-    .inTimezone(tz)
-    .create();
-
-  // エラー通知の設定
-  const scriptProperties = PropertiesService.getScriptProperties();
-  scriptProperties.setProperty(
-    'NOTIFICATION_EMAIL',
-    'izm.master@izumogroup.co.jp'
-  );
-}
-
-/**
- * テスト用：純粋な差分抽出ロジック
- */
-function extractDifferencesFromArrays(yesterdayData, todayData) {
-  const differences = [];
-  const ym = new Map();
-  for (let i = 1; i < yesterdayData.length; i++) {
-    const row = yesterdayData[i];
-    const [name, , date] = row;
-    ym.set(`${name}_${date}`, row.slice());
-  }
-  const tm = new Map();
-  for (let i = 1; i < todayData.length; i++) {
-    const row = todayData[i];
-    const [name, , date] = row;
-    tm.set(`${name}_${date}`, row.slice());
-  }
-  // 追加・変更検出
-  for (const [key, row] of tm.entries()) {
-    const yRow = ym.get(key);
-    if (
-      !yRow ||
-      yRow[5] !== row[5] ||
-      yRow[6] !== row[6] ||
-      yRow[7] !== row[7]
-    ) {
-      differences.push(row.slice());
-    }
-  }
-  // 削除検出
-  for (const [key, row] of ym.entries()) {
-    if (!tm.has(key)) {
-      const delRow = row.slice();
-      delRow.push('DELETE');
-      differences.push(delRow);
-    }
-  }
-  return differences;
-}
-
-/**
- * CSV/シート整形ユーティリティ: A〜H列とCH列のみを残す
- * - 行配列から、[0..7] および [85] (存在する場合) を抽出
- * - CH列は存在しない場合は無視（A〜Hのみ残る）
- */
-function keepAHAndCHColumns(rows) {
-  if (!rows || rows.length === 0) return [];
-  const result = [];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const kept = [];
-    // A〜H -> 0..7
-    for (let c = 0; c <= 7 && c < row.length; c++) kept.push(row[c]);
-    // CH -> index 85 (0-based)
-    if (row.length > 85) kept.push(row[85]);
-    result.push(kept);
-  }
-  return result;
-}
-
-/**
- * CSV文字列をパースし、A〜H列とCH列を残した2次元配列を返す
- */
-function formatCsvDataKeepAHAndCH(csvString) {
-  if (!csvString) return [];
-  const rows = Utilities.parseCsv(csvString);
-  return keepAHAndCHColumns(rows);
-}
-
-/**
- * アクティブなシートで、A〜H列とCH列のみを残し、その他の列を削除する
- * - 性能のため、削除は範囲で2回に分けて実行
- *   1) CH(86)の右側を一括削除
- *   2) I(9)〜CG(85)を一括削除 → CHが9列目に移動
- * - CHが存在しない場合は I〜末尾を削除（A〜Hのみ残る）
- */
+/** ==== 参考: シート列削除ユーティリティ（非推奨・使わない想定。互換のため残置） ==== */
 function cleanupActiveSheetColumnsAHandCH() {
   const ss = getSpreadsheet();
   const sheet = ss.getActiveSheet ? ss.getActiveSheet() : ss.getSheets()[0];
   keepAHAndCHColumnsInSheet(sheet);
 }
-
-/**
- * 指定シートでA〜HとCHのみ残す（上記の実体）
- * Apps ScriptのdeleteColumnsは列が詰まる挙動のため、右側から/大きな範囲で削除
- */
 function keepAHAndCHColumnsInSheet(sheet) {
   if (!sheet) return;
   let last = sheet.getLastColumn();
-  if (last <= 8) return; // そもそも8列以下
-
-  // Step1: CH(86)の右側を削除
+  if (last <= 8) return;
   if (last > 86) {
     const count = last - 86;
     sheet.deleteColumns(87, count);
   }
-
-  // 最新の列数を取得し直し
   last = sheet.getLastColumn();
-
-  // Step2: I(9)〜min(CG(85), last) を削除
   const rightEnd = Math.min(85, last);
   if (rightEnd >= 9) {
-    const count2 = rightEnd - 8; // 9..rightEnd まで
+    const count2 = rightEnd - 8;
     sheet.deleteColumns(9, count2);
   }
 }
 
-/**
- * スプレッドシートにカスタムメニューを追加
- */
+/** onOpen: メニュー（任意） */
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('整形ツール')
-    .addItem('A〜HとCHのみ残す', 'cleanupActiveSheetColumnsAHandCH')
+    .addItem('A〜HとCHのみ残す（非推奨: 手動）', 'cleanupActiveSheetColumnsAHandCH')
     .addToUi();
 }
