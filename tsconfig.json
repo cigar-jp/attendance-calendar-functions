@@ -10,7 +10,11 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": false,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "allowJs": true,            // GAS .gs を JS として型チェック対象に含める
+    "checkJs": true,            // .js/.gs ファイルの型エラーを表示
+    "types": ["google-apps-script"], // 公式型定義を利用（npm で @types/google-apps-script を追加）
+    "noEmit": true              // JS/TS のビルド成果物は不要（Apps Script 用）
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]

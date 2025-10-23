@@ -1,3 +1,9 @@
+// @ts-nocheck
+/// <reference path="./gas-globals.d.ts" />
+/**
+ * VSCode 型エラー抑制用: Google Apps Script ランタイムのグローバルは実行時に提供される。
+ * 本ファイルは .gs (allowJs + checkJs) でチェックされるため最低限の型注釈を付与。
+ */
 /****************************************************
  * Jinjer 勤怠 取込～整形～差分処理・配信（当月＋翌月対応）
  * - Gmail → ZIP（Shift_JIS対応）→ CSV → A..H + CH抽出
@@ -31,6 +37,10 @@ function getSpreadsheetTest() {
  * - メールは「既読化」・「ラベル付与」しない（本番の副作用なし）
  * - ハッシュの幂等性チェックや Message-ID 記録もしない（純粋に取り込み確認）
  */
+/**
+ * Dry run ingest (単発). Gmail → ZIP → CSV → 整形 → TESTシートへ。
+ * @returns {void}
+ */
 function testIngestFromGmailOnce() {
   const ss = getSpreadsheetTest();
 
@@ -46,13 +56,15 @@ function testIngestFromGmailOnce() {
   let processed = 0;
 
   for (const m of msgs) {
+    /** @type {Blob[]} */
     const atts = m.getAttachments({ includeInlineImages: false, includeAttachments: true }) || [];
-    const zips = atts.filter(a => /\.zip$/i.test(a.getName()));
+  /** @type {Blob[]} */
+  const zips = atts.filter((a /** @type {Blob} */) => /\.zip$/i.test(a.getName()));
     if (zips.length === 0) continue;
 
     for (const zipBlob of zips) {
       const unzipped = Utilities.unzip(zipBlob.copyBlob());
-      for (const file of unzipped) {
+  for (const file of unzipped) {
         // 中身でCSV判定（Shift_JIS優先）
         const csvText = decodeCsvText_(file);
         const rows = Utilities.parseCsv(csvText);
@@ -65,7 +77,9 @@ function testIngestFromGmailOnce() {
 
         // 月バケツ（C列= index 2）
         const buckets = bucketByMonth_(dataOnly);
-        let info = [];
+  /** @type {string[]} */
+  /** @type {string[]} */
+  let info = [];
         buckets.forEach((valuesForMonth, month) => {
           const prefix = `${month}月_TEST_`;
           rotateAndWriteToNamesNoHash_(ss, prefix + '今日分', prefix + '昨日分', valuesForMonth);
@@ -89,7 +103,14 @@ function testIngestFromGmailOnce() {
 /**
  * テスト用：ハッシュ比較なしで rotate & write（TEST_用途）
  */
-function rotateAndWriteToNamesNoHash_(ss, todayName, yesterdayName, values) {
+/**
+ * TEST 用 rotate & write
+ * @param {any} ss
+ * @param {string} todayName
+ * @param {string} yesterdayName
+ * @param {any[][]} values
+ */
+function rotateAndWriteToNamesNoHash_(ss /** @type {any} */, todayName /** @type {string} */, yesterdayName /** @type {string} */, values /** @type {any[][]} */) {
   if (!values || values.length === 0) return;
 
   const today = ss.getSheetByName(todayName);
@@ -111,7 +132,11 @@ function rotateAndWriteToNamesNoHash_(ss, todayName, yesterdayName, values) {
  * - 実行前に「SPREADSHEET_ID」を**テスト用ID**に切替えておくと安全（本番カレンダーに書かれます）
  * - month: 数値（例 10）
  */
-function copyTestToRealNamesForMonth(month) {
+/**
+ * TESTシートを実名コピー
+ * @param {number} month
+ */
+function copyTestToRealNamesForMonth(month /** @type {number} */) {
   const ss = getSpreadsheet();
   const testSs = getSpreadsheetTest();
 
@@ -138,15 +163,19 @@ function copyTestToRealNamesForMonth(month) {
  * TESTシートの掃除（不要になったら）
  * - 直近2ヶ月だけ消すなど用途に応じて使ってください
  */
+/**
+ * TESTシート削除
+ * @param {number[]} months
+ */
 function deleteTestSheets(months = []) {
   const ss = getSpreadsheetTest();
-  const names = ss.getSheets().map(s => s.getName());
-  const targets = names.filter(n => /月_TEST_/.test(n));
+  const names = ss.getSheets().map((s /** @type {any} */) => s.getName());
+  const targets = names.filter((n /** @type {string} */) => /月_TEST_/.test(n));
   const filtered = months.length
-    ? targets.filter(n => months.some(m => n.startsWith(`${m}月_TEST_`)))
+  ? targets.filter((n /** @type {string} */) => months.some((m /** @type {number} */) => n.startsWith(`${m}月_TEST_`)))
     : targets;
 
-  filtered.forEach(name => {
+  filtered.forEach((name /** @type {string} */) => {
     const sh = ss.getSheetByName(name);
     if (sh) { ss.deleteSheet(sh); Logger.log(`deleted: ${name}`); }
   });
@@ -159,17 +188,18 @@ function deleteTestSheets(months = []) {
 
 /** スプレッドシート取得（SPREADSHEET_IDはScript Propertiesに保存） */
 function getSpreadsheet() {
-  return SpreadsheetApp.openById(
-    PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')
-  );
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID') || '';
+  return SpreadsheetApp.openById(id);
 }
 
 /** 16進文字列へ */
-function toHex_(bytes) {
-  return bytes.map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+/** @param {number[]} bytes */
+function toHex_(bytes /** @type {number[]} */) {
+  return bytes.map((b /** @type {number} */) => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
 }
 
 /** 値配列のMD5（幂等性チェック用）。大きい配列はJSON文字列化で十分実務的に堅牢 */
+/** @param {any[][]} values */
 function hashValues_(values) {
   const json = JSON.stringify(values || []);
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, json);
@@ -177,6 +207,7 @@ function hashValues_(values) {
 }
 
 /** Slack通知（任意） */
+/** @param {string} text */
 function notifySlack_(text) {
   if (!CFG.SLACK_WEBHOOK_URL) return;
   try {
@@ -192,12 +223,14 @@ function notifySlack_(text) {
 }
 
 /** ラベル取得・作成 */
+/** @param {string} name */
 function getOrCreateLabel_(name) {
   const ex = GmailApp.getUserLabelByName(name);
   return ex || GmailApp.createLabel(name);
 }
 
 /** CSV Blob → 安全デコード（Shift_JIS優先。失敗時はUTF-8等フォールバック） */
+/** @param {Blob} blob */
 function decodeCsvText_(blob) {
   const tryEncodings = ['Shift_JIS', 'Windows-31J', 'MS932', 'UTF-8'];
   for (const enc of tryEncodings) {
@@ -210,6 +243,7 @@ function decodeCsvText_(blob) {
 }
 
 /** ざっくりCSVっぽいか判定 */
+/** @param {string} text */
 function looksLikeCsv_(text) {
   if (!text) return false;
   const lines = text.split(/\r\n|\n/);
@@ -224,6 +258,7 @@ function looksLikeCsv_(text) {
  * A〜H と CH だけ残す（ヘッダー含む2次元配列→同様に返す）
  * - 後段のシート列削除は使わない（配列整形で完結）
  */
+/** @param {any[][]} rows */
 function keepAHAndCHColumns(rows) {
   if (!rows || rows.length === 0) return [];
   const result = [];
@@ -242,6 +277,13 @@ function keepAHAndCHColumns(rows) {
  * - 幅優先: 1回の setValues で高速化
  * - 幂等性: 書き込み前に既存 today の MD5 と比較し、同一ならスキップ
  * - ハッシュは Script Properties に保存（キー HASH_{todayName}）
+ */
+/**
+ * 幅優先ローテーション + 幂等性
+ * @param {any} ss
+ * @param {string} todayName
+ * @param {string} yesterdayName
+ * @param {any[][]} values
  */
 function rotateAndWrite_(ss, todayName, yesterdayName, values) {
   if (!values || values.length === 0) return;
@@ -294,11 +336,12 @@ function getCurrentAndNextMonth_() {
 }
 
 /** rows（データ行）を月ごと（C列= index 2 の日付）にバケツ分け */
+/** @param {any[][]} rows */
 function bucketByMonth_(rows) {
   const buckets = new Map(); // month -> rows[]
   for (const r of rows) {
-    const d = new Date(r[2]);
-    if (isNaN(d)) continue;
+  const d = new Date(r[2]);
+  if (Number.isNaN(d.getTime())) continue;
     const m = d.getMonth() + 1;
     if (!buckets.has(m)) buckets.set(m, []);
     buckets.get(m).push(r);
