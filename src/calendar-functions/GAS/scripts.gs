@@ -691,40 +691,7 @@ function processAllUsers(diffData) {
     Logger.log('処理対象のデータがありません');
     return;
   }
-
-  const usersMap = [
-    { name: '福田 真一', email: 's.fukuda@izumogroup.co.jp' },
-    { name: '塩田 敬子', email: 't.shioda@izumogroup.co.jp' },
-    { name: '坪井 彩華', email: 'a.tsuboi@izumogroup.co.jp' },
-    { name: '南 沙希子', email: 's.minami@izumogroup.co.jp' },
-    { name: '番場 舞', email: 'm.banba@izumogroup.co.jp' },
-    { name: '齊藤 祐哉', email: 'y.saito@izumogroup.co.jp' },
-    { name: '安井 誇美', email: 'k.yasui@izumogroup.co.jp' },
-    { name: '河井 咲良', email: 's.kawai@yakumogeihinkan.jp' },
-    { name: '岩永 千佳', email: 'c.iwanaga@yakumogeihinkan.jp' },
-    { name: '吉池 紗江', email: 's.yoshiike@yakumogeihinkan.jp' },
-    { name: '吉田 良', email: 'r.yoshida@izumogroup.co.jp' },
-    { name: '久保 紅生', email: 'a.kubo@yakumogeihinkan.jp' },
-    { name: '細川 星七', email: 's.hosokawa@izumogroup.jp' },
-    { name: '山口 聖一', email: 's.yamaguchi@izumogroup.jp' },
-    { name: '小川 航輝', email: 'k.ogawa@yakumogeihinkan.jp' },
-    { name: '小嶋 未由璃', email: 'm.kojima@yakumogeihinkan.jp' },
-    { name: '森下 桜', email: 's.morishita@yakumogeihinkan.jp' },
-    { name: '中井 啓子', email: 'k.nakai@yakumogeihinkan.jp' },
-    { name: '渡邉 美優', email: 'm.watanabe@yakumogeihinkan.jp' },
-    { name: '堂本 和希', email: 'k.domoto@izumogroup.jp' },
-    { name: '馬場 康成', email: 'y.baba@izumogroup.co.jp' },
-    { name: '平澤 莉奈', email: 'r.hirasawa@izumogroup.jp' },
-    { name: '牧野 吉泰', email: 'y.makino@yakumogeihinkan.jp' },
-    { name: '林 龍矢', email: 'r.hayashi@izumogroup.jp' },
-    { name: '竹澤 将', email: 's.takezawa@yakumogeihinkan.jp' },
-    { name: '高橋 楓美花', email: 'f.takahashi@yakumogeihinkan.jp' },
-    { name: '千崎奈緒美', email: 'n.senzaki@izumogroup.co.jp' },
-    { name: '辻岡 沙織', email: 's.tsujioka@yakumogeihinkan.jp' },
-    { name: '佐野 日奈子', email: 'h.sano@medelbeauty.jp' },
-    { name: '柴山 佳奈', email: 'k.shibayama@medelbeauty.jp' },
-    { name: '桒原 未来', email: 'm.kuwabara@medelbeauty.jp' },
-  ];
+  const usersMap = loadUsers_();
 
   // ユーザー名で差分を事前グルーピング
   const grouped = new Map(); // name -> rows[]
@@ -743,6 +710,29 @@ function processAllUsers(diffData) {
     Logger.log('処理開始: ' + user.name + ' (' + user.email + ') / ' + rows.length + '行');
     addEventsFromSpreadsheet(user, rows);
   });
+}
+
+/** USERS_JSON を Script Properties からロードし検証 */
+function loadUsers_() {
+  const raw = PropertiesService.getScriptProperties().getProperty('USERS_JSON');
+  if (!raw) {
+    Logger.log('[loadUsers_] USERS_JSON 未設定');
+    return [];
+  }
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) {
+      Logger.log('[loadUsers_] USERS_JSON は配列ではありません');
+      return [];
+    }
+    return arr
+      .filter(u => u && typeof u === 'object')
+      .map(u => ({ name: String(u.name || '').trim(), email: String(u.email || '').trim() }))
+      .filter(u => u.name && u.email);
+  } catch (e) {
+    Logger.log('[loadUsers_] 解析失敗: ' + e);
+    return [];
+  }
 }
 
 /** 以下 addEventsFromSpreadsheet / validate* / generateEventTitle / process* は既存どおり */
