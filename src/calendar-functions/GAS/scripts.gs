@@ -9,11 +9,150 @@
 /** ====== 設定値 ====== */
 const CFG = {
   SUBJECT: '【jinjer勤怠】汎用データ_ダウンロード処理完了通知',
-  GMAIL_QUERY: 'label:jinjer勤怠 subject:"【jinjer勤怠】汎用データ_ダウンロード処理完了通知" from:entry@kintai.jinjer.biz has:attachment filename:zip newer_than:7d',
+  GMAIL_QUERY: 'label:jinjer勤怠 subject:"【jinjer勤怠】汎用データ_ダウンロード処理完了通知" from:entry@kintai.jinjer.biz has:attachment filename:zip newer_than:2d',
   PROCESSED_LABEL: 'jinjer/processed',
   NOTIFY_EMAIL: 'izm.master@izumogroup.co.jp',
   SLACK_WEBHOOK_URL: '', // Slack不要なら空のまま
 };
+
+
+/*** ▼▼ テスト専用ユーティリティ ▼▼ ***/
+
+/** テスト用スプレッドシートを開く */
+function getSpreadsheetTest() {
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID_TEST');
+  if (!id) throw new Error('SPREADSHEET_ID_TEST が未設定です（スクリプトプロパティに追加してください）');
+  return SpreadsheetApp.openById(id);
+}
+
+/**
+ * 【乾いたテスト】Gmail→ZIP→CSV（Shift_JIS対応）→A..H+CH抽出→各月 TEST_シートへ書込み
+ * - 1スレッド分だけ処理
+ * - メールは「既読化」・「ラベル付与」しない（本番の副作用なし）
+ * - ハッシュの幂等性チェックや Message-ID 記録もしない（純粋に取り込み確認）
+ */
+function testIngestFromGmailOnce() {
+  const ss = getSpreadsheetTest();
+
+  // 最新1スレッドだけ拾う（CFG.GMAIL_QUERY は本番のを使う。必要なら newer_than を短く）
+  const threads = GmailApp.search(CFG.GMAIL_QUERY, 0, 1);
+  if (threads.length === 0) {
+    Logger.log('[testIngestFromGmailOnce] 対象メールが見つかりません');
+    return;
+  }
+
+  const th = threads[0];
+  const msgs = th.getMessages();
+  let processed = 0;
+
+  for (const m of msgs) {
+    const atts = m.getAttachments({ includeInlineImages: false, includeAttachments: true }) || [];
+    const zips = atts.filter(a => /\.zip$/i.test(a.getName()));
+    if (zips.length === 0) continue;
+
+    for (const zipBlob of zips) {
+      const unzipped = Utilities.unzip(zipBlob);
+      for (const file of unzipped) {
+        // 中身でCSV判定（Shift_JIS優先）
+        const csvText = decodeCsvText_(file);
+        const rows = Utilities.parseCsv(csvText);
+        if (!rows || rows.length === 0) continue;
+
+        // A..H + CH だけ残す（ヘッダ含む）
+        const shaped = keepAHAndCHColumns(rows);
+        const dataOnly = shaped.length > 1 ? shaped.slice(1) : [];
+        if (dataOnly.length === 0) continue;
+
+        // 月バケツ（C列= index 2）
+        const buckets = bucketByMonth_(dataOnly);
+        let info = [];
+        buckets.forEach((valuesForMonth, month) => {
+          const prefix = `${month}月_TEST_`;
+          rotateAndWriteToNamesNoHash_(ss, prefix + '今日分', prefix + '昨日分', valuesForMonth);
+          info.push(`${month}月:${valuesForMonth.length}行`);
+        });
+
+        Logger.log(`[testIngestFromGmailOnce] 書込み: ${info.join(', ')}`);
+        processed++;
+      }
+    }
+    if (processed > 0) break; // 1メール分で終了
+  }
+
+  if (processed === 0) {
+    Logger.log('[testIngestFromGmailOnce] ZIP/CSV が見つかりませんでした');
+  } else {
+    Logger.log('[testIngestFromGmailOnce] 完了。テスト用シート（X月_TEST_今日分/昨日分）を確認してください。');
+  }
+}
+
+/**
+ * テスト用：ハッシュ比較なしで rotate & write（TEST_用途）
+ */
+function rotateAndWriteToNamesNoHash_(ss, todayName, yesterdayName, values) {
+  if (!values || values.length === 0) return;
+
+  const today = ss.getSheetByName(todayName);
+  if (today) {
+    const yesterday = ss.getSheetByName(yesterdayName) || ss.insertSheet(yesterdayName);
+    yesterday.clearContents();
+    const ex = today.getDataRange().getValues();
+    if (ex && ex.length > 0) {
+      yesterday.getRange(1, 1, ex.length, ex[0].length).setValues(ex);
+    }
+    today.clearContents();
+  }
+  const target = ss.getSheetByName(todayName) || ss.insertSheet(todayName);
+  target.getRange(1, 1, values.length, values[0].length).setValues(values);
+}
+
+/**
+ * （任意）TESTシートを実名にコピーして差分処理を試す
+ * - 実行前に「SPREADSHEET_ID」を**テスト用ID**に切替えておくと安全（本番カレンダーに書かれます）
+ * - month: 数値（例 10）
+ */
+function copyTestToRealNamesForMonth(month) {
+  const ss = getSpreadsheet();
+  const testSs = getSpreadsheetTest();
+
+  const pairs = [
+    { from: `${month}月_TEST_今日分`,   to: `${month}月_今日分`   },
+    { from: `${month}月_TEST_昨日分`,   to: `${month}月_昨日分`   },
+  ];
+
+  pairs.forEach(({from, to}) => {
+    const src = testSs.getSheetByName(from);
+    if (!src) { Logger.log(`[copyTestToRealNamesForMonth] 見つからない: ${from}`); return; }
+
+    const data = src.getDataRange().getValues();
+    let dst = ss.getSheetByName(to) || ss.insertSheet(to);
+    dst.clearContents();
+    if (data.length > 0) dst.getRange(1, 1, data.length, data[0].length).setValues(data);
+    Logger.log(`[copyTestToRealNamesForMonth] コピー: ${from} -> ${to} (${data.length}行)`);
+  });
+
+  Logger.log('コピー完了。続けて processSheets() を実行して差分～カレンダーを確認してください。');
+}
+
+/**
+ * TESTシートの掃除（不要になったら）
+ * - 直近2ヶ月だけ消すなど用途に応じて使ってください
+ */
+function deleteTestSheets(months = []) {
+  const ss = getSpreadsheetTest();
+  const names = ss.getSheets().map(s => s.getName());
+  const targets = names.filter(n => /月_TEST_/.test(n));
+  const filtered = months.length
+    ? targets.filter(n => months.some(m => n.startsWith(`${m}月_TEST_`)))
+    : targets;
+
+  filtered.forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (sh) { ss.deleteSheet(sh); Logger.log(`deleted: ${name}`); }
+  });
+}
+
+/*** ▲▲ テスト専用ユーティリティ ここまで ▲▲ ***/
 
 
 /** ====== ユーティリティ ====== */
